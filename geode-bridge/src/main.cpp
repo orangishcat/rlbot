@@ -181,8 +181,7 @@ static void writeState(PlayLayer *pl) {
 
     std::vector<bridge::HitFace> objectFaces;
     if (radius > 0.f) {
-      objectFaces.push_back(
-          {bridge::FACE_CIRCLE, cat, 0, cx, cy, radius, 0.f});
+      objectFaces.push_back({bridge::FACE_CIRCLE, cat, 0, cx, cy, radius, 0.f});
     } else {
       std::vector<cocos2d::CCPoint> vertices;
       if (go->getType() == GameObjectType::Slope) {
@@ -213,8 +212,7 @@ static void writeState(PlayLayer *pl) {
       for (size_t i = 0; i < vertices.size(); ++i) {
         auto &a = vertices[i];
         auto &b = vertices[(i + 1) % vertices.size()];
-        objectFaces.push_back(
-            {bridge::FACE_FLAT, cat, 0, a.x, a.y, b.x, b.y});
+        objectFaces.push_back({bridge::FACE_FLAT, cat, 0, a.x, a.y, b.x, b.y});
       }
     }
     if (!objectFaces.empty())

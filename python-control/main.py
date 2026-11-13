@@ -109,11 +109,14 @@ class ControlGUI:
         c = self.canvas
         c.delete("all")
         w, h = c.winfo_width(), c.winfo_height()
-        first_fifth_x, center_y = w // 5, h // 2
+        first_seventh_x, center_y = w // 7, h // 2
         player = self.bridge.p1
 
         # camera origin; player is placed at x = 1/5 width and y = 1/2 height of canvas
-        ox, oy = first_fifth_x - player.x * self.SCALE, center_y + player.y * self.SCALE
+        ox, oy = (
+            first_seventh_x - player.x * self.SCALE,
+            center_y + player.y * self.SCALE,
+        )
 
         c.create_rectangle(1, 1, w, h, outline="#888")
 
@@ -123,9 +126,7 @@ class ControlGUI:
             if f.kind == FACE_CIRCLE:
                 r = f.x2 * s
                 cx, cy = ox + f.x1 * s, oy - f.y1 * s
-                c.create_oval(
-                    cx - r, cy - r, cx + r, cy + r, outline=color, width=2
-                )
+                c.create_oval(cx - r, cy - r, cx + r, cy + r, outline=color, width=2)
             else:
                 c.create_line(
                     ox + f.x1 * s,
