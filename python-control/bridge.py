@@ -3,6 +3,7 @@
 MIRRORS geode-bridge/src/Shared.hpp -- keep in sync.
 """
 
+import collections
 import os
 import struct
 import time
@@ -12,8 +13,17 @@ BRIDGE_PATH = os.path.expanduser(
 )
 
 MAGIC = 0x52424447  # "GDBR"
-VERSION = 1
+VERSION = 2
 MAX_FACES = 1000
+
+# HitFace.kind
+FACE_FLAT = 0  # line segment (x1, y1) - (x2, y2)
+FACE_CIRCLE = 1  # circle at (x1, y1) with radius x2
+
+# HitFace.category
+CAT_SOLID = 0  # collideable, harmless (blocks, slopes)
+CAT_HAZARD = 1  # kills the player (spikes, saws)
+CAT_INTERACT = 2  # interactible (portals, pads, orbs, coins)
 
 GAMEMODE_NAMES = ("cube", "ship", "ball", "ufo", "wave", "robot", "spider", "swing")
 
@@ -21,12 +31,17 @@ GAMEMODE_NAMES = ("cube", "ship", "ball", "ufo", "wave", "robot", "spider", "swi
 HEADER = struct.Struct("<IIQQII")
 HEADER_SIZE = HEADER.size  # 32
 PLAYER = struct.Struct("<8BBBH3f")  # 24 bytes
-FACE = struct.Struct("<4f")  # 16 bytes
+FACE = struct.Struct("<BB2x4f")  # 20 bytes, pad skipped
 FACES_OFFSET = HEADER_SIZE + PLAYER.size * 2  # 80
-INPUTS_OFFSET = FACES_OFFSET + FACE.size * MAX_FACES  # 1680
-TOTAL_SIZE = INPUTS_OFFSET + 8  # 1688
+INPUTS_OFFSET = FACES_OFFSET + FACE.size * MAX_FACES
+TOTAL_SIZE = INPUTS_OFFSET + 8
 
 INPUTS = struct.Struct("<BB6x")
+
+# (kind, category, x1, y1, x2, y2)
+Face = collections.namedtuple(
+    "Face", "kind category x1 y1 x2 y2", defaults=(0, 0, 0.0, 0.0, 0.0, 0.0)
+)
 
 
 class PlayerState:
@@ -55,7 +70,7 @@ class Bridge:
         self.p1 = PlayerState()
         self.p2 = PlayerState()
         self.two_player = False
-        self.faces = []  # list of (x1, y1, x2, y2), nearest 100
+        self.faces = []  # list of Face, nearest hitbox faces
         self.state_fresh = False
 
     # -- connection -----------------------------------------------------
@@ -117,7 +132,9 @@ class Bridge:
 
         self.faces = []
         for i in range(min(face_count, MAX_FACES)):
-            self.faces.append(FACE.unpack_from(snap, FACES_OFFSET + i * FACE.size))
+            self.faces.append(
+                Face(*FACE.unpack_from(snap, FACES_OFFSET + i * FACE.size))
+            )
         return True
 
     def _read_player(self, player: PlayerState, offset: int):

@@ -18,8 +18,19 @@
 namespace bridge {
 
 constexpr uint32_t MAGIC = 0x52424447; // "GDBR" little-endian
-constexpr uint32_t VERSION = 1;
+constexpr uint32_t VERSION = 2;
 constexpr int MAX_FACES = 1000;
+
+// HitFace::kind
+inline constexpr uint8_t FACE_FLAT = 0;   // line segment (x1,y1)-(x2,y2)
+inline constexpr uint8_t FACE_CIRCLE = 1; // circle at (x1,y1) with radius x2
+
+// HitFace::category
+inline constexpr uint8_t CAT_SOLID =
+    0; // collideable, harmless (blocks, slopes)
+inline constexpr uint8_t CAT_HAZARD = 1; // kills the player (spikes, saws)
+inline constexpr uint8_t CAT_INTERACT =
+    2; // interactible (portals, pads, orbs, coins)
 
 // cube, ship, ball, ufo, wave, robot, spider, swing
 // all false -> gamemode nonexistent
@@ -34,10 +45,13 @@ struct PlayerState {
   float x, y, angle;
 }; // 24 bytes
 
-struct Face {
-  float x1, y1; // start of face
-  float x2, y2; // end of face
-}; // 16 bytes
+struct HitFace {
+  uint8_t kind;     // FACE_FLAT or FACE_CIRCLE
+  uint8_t category; // CAT_SOLID, CAT_HAZARD or CAT_INTERACT
+  uint16_t _pad;
+  float x1, y1; // flat: start point / circle: center
+  float x2, y2; // flat: end point / circle: radius (y2 unused = 0)
+}; // 20 bytes
 
 struct SharedLayout {
   uint32_t magic;
@@ -48,7 +62,8 @@ struct SharedLayout {
   uint32_t faceCount;
   PlayerState p1;
   PlayerState p2;
-  Face faces[MAX_FACES]; // nearest 100 faces to the player
+  HitFace faces[MAX_FACES]; // nearest hitbox faces of interactible/collideable
+                            // objects
   uint8_t p1Held;
   uint8_t p2Held;
   uint8_t _pad[6];
@@ -58,7 +73,7 @@ inline constexpr size_t OFFSET_FACES = offsetof(SharedLayout, faces);
 inline constexpr size_t OFFSET_INPUTS = offsetof(SharedLayout, p1Held);
 inline constexpr size_t TOTAL_SIZE = sizeof(SharedLayout);
 static_assert(sizeof(PlayerState) == 24);
-static_assert(sizeof(Face) == 16);
+static_assert(sizeof(HitFace) == 20);
 
 inline std::string bridgePath() {
   // Must match python-control/bridge.py BRIDGE_PATH

@@ -1,6 +1,19 @@
 import tkinter as tk
 
-from bridge import GAMEMODE_NAMES, Bridge
+from bridge import (
+    CAT_HAZARD,
+    CAT_INTERACT,
+    CAT_SOLID,
+    FACE_CIRCLE,
+    GAMEMODE_NAMES,
+    Bridge,
+)
+
+FACE_COLORS = {
+    CAT_SOLID: "#4fc3f7",  # blue: collideable
+    CAT_HAZARD: "#f44336",  # red: deadly
+    CAT_INTERACT: "#4caf50",  # green: interactible
+}
 
 
 class ControlGUI:
@@ -104,15 +117,24 @@ class ControlGUI:
 
         c.create_rectangle(1, 1, w, h, outline="#888")
 
-        for x1, y1, x2, y2 in self.bridge.faces:
-            c.create_line(
-                ox + x1 * self.SCALE,
-                oy - y1 * self.SCALE,
-                ox + x2 * self.SCALE,
-                oy - y2 * self.SCALE,
-                fill="#4fc3f7",
-                width=1,
-            )
+        s = self.SCALE
+        for f in self.bridge.faces:
+            color = FACE_COLORS.get(f.category, "#888")
+            if f.kind == FACE_CIRCLE:
+                r = f.x2 * s
+                cx, cy = ox + f.x1 * s, oy - f.y1 * s
+                c.create_oval(
+                    cx - r, cy - r, cx + r, cy + r, outline=color, width=2
+                )
+            else:
+                c.create_line(
+                    ox + f.x1 * s,
+                    oy - f.y1 * s,
+                    ox + f.x2 * s,
+                    oy - f.y2 * s,
+                    fill=color,
+                    width=1,
+                )
 
         p_size = 8 * self.SCALE
         if player.present:

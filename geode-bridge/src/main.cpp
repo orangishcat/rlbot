@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <utility>
 #include <vector>
 
 using namespace geode::prelude;
@@ -53,6 +54,68 @@ static void fillPlayer(bridge::PlayerState &out, PlayerObject *player,
   out.angle = player->getRotation();
 }
 
+// category for a gameplay object; 255 = not interactible/collideable, skip.
+static uint8_t categoryForType(GameObjectType t) {
+  switch (t) {
+  case GameObjectType::Hazard:
+  case GameObjectType::AnimatedHazard:
+    return bridge::CAT_HAZARD;
+
+  // portals
+  case GameObjectType::InverseGravityPortal:
+  case GameObjectType::NormalGravityPortal:
+  case GameObjectType::ShipPortal:
+  case GameObjectType::CubePortal:
+  case GameObjectType::InverseMirrorPortal:
+  case GameObjectType::NormalMirrorPortal:
+  case GameObjectType::BallPortal:
+  case GameObjectType::RegularSizePortal:
+  case GameObjectType::MiniSizePortal:
+  case GameObjectType::UfoPortal:
+  case GameObjectType::DualPortal:
+  case GameObjectType::SoloPortal:
+  case GameObjectType::WavePortal:
+  case GameObjectType::RobotPortal:
+  case GameObjectType::TeleportPortal:
+  case GameObjectType::SpiderPortal:
+  case GameObjectType::SwingPortal:
+  case GameObjectType::GravityTogglePortal:
+  // pads
+  case GameObjectType::YellowJumpPad:
+  case GameObjectType::PinkJumpPad:
+  case GameObjectType::GravityPad:
+  case GameObjectType::RedJumpPad:
+  case GameObjectType::SpiderPad:
+  // rings/orbs
+  case GameObjectType::YellowJumpRing:
+  case GameObjectType::PinkJumpRing:
+  case GameObjectType::GravityRing:
+  case GameObjectType::RedJumpRing:
+  case GameObjectType::GreenRing:
+  case GameObjectType::DropRing:
+  case GameObjectType::CustomRing:
+  case GameObjectType::DashRing:
+  case GameObjectType::GravityDashRing:
+  case GameObjectType::SpiderOrb:
+  case GameObjectType::TeleportOrb:
+  // collectibles
+  case GameObjectType::SecretCoin:
+  case GameObjectType::Collectible:
+  case GameObjectType::UserCoin:
+    return bridge::CAT_INTERACT;
+
+  // purely visual / non-physical
+  case GameObjectType::Decoration:
+  case GameObjectType::Modifier:
+  case GameObjectType::EnterEffectObject:
+    return 255;
+
+  // Solid, Slope, Breakable, CollisionObject, Special and anything else
+  default:
+    return bridge::CAT_SOLID;
+  }
+}
+
 static void writeState(PlayLayer *pl) {
   auto *d = g_shm.data();
   fillPlayer(d->p1, pl->m_player1, true);
@@ -63,48 +126,110 @@ static void writeState(PlayLayer *pl) {
   d->twoPlayer =
       (pl->m_levelSettings && pl->m_levelSettings->m_twoPlayerMode) ? 1 : 0;
 
-  // nearest faces: hitbox rect edges of nearby objects
+  // nearest faces: real hitbox faces (flat segments or circles) of nearby
+  // interactible/collideable objects
   auto p1 = pl->m_player1->getPosition();
   auto p2pos = pl->m_player2->getPosition();
 
   struct Tmp {
-    bridge::Face face;
+    std::vector<bridge::HitFace> faces;
     float dist;
   };
   static std::vector<Tmp> tmp;
   tmp.clear();
 
   for (auto *go : CCArrayExt<GameObject *>(pl->m_objects)) {
-    auto rect = go->getObjectRect();
-    if (rect.size.width <= 0.f && rect.size.height <= 0.f)
+    if (go->m_isDisabled || go->m_isGroupDisabled || go->m_isGroupDisabledTemp)
       continue;
+
+    uint8_t cat = categoryForType(go->getType());
+    if (cat == 255)
+      continue;
+
+    // circular hitboxes are the in-game hitbox for round objects
+    // (orbs, saws, ...); everything else uses the hitbox rect
+    float radius = go->getObjectRadius();
+    float minX, minY, maxX, maxY, cx = 0.f, cy = 0.f;
+    if (radius > 0.f) {
+      auto c = go->getPosition();
+      cx = c.x;
+      cy = c.y;
+      minX = cx - radius;
+      maxX = cx + radius;
+      minY = cy - radius;
+      maxY = cy + radius;
+    } else {
+      auto rect = go->getObjectRect(); // gameplay hitbox rect, world space
+      if (rect.size.width <= 0.f && rect.size.height <= 0.f)
+        continue;
+      minX = rect.getMinX();
+      maxX = rect.getMaxX();
+      minY = rect.getMinY();
+      maxY = rect.getMaxY();
+    }
 
     float distX = 1e18f;
     float distY = 1e18f;
     for (auto pp : {p1, p2pos}) {
-      float dx =
-          std::max(0.f, std::max(rect.getMinX() - pp.x, pp.x - rect.getMaxX()));
-      float dy =
-          std::max(0.f, std::max(rect.getMinY() - pp.y, pp.y - rect.getMaxY()));
+      float dx = std::max(0.f, std::max(minX - pp.x, pp.x - maxX));
+      float dy = std::max(0.f, std::max(minY - pp.y, pp.y - maxY));
       distX = std::min(distX, std::abs(dx));
       distY = std::min(distY, std::abs(dy));
     }
-    if (distX > 800.f || distY > 500 || rect.getMaxX() < p1.x)
+    if (distX > 800.f || distY > 500 || maxX < p1.x)
       continue;
 
-    float minX = rect.getMinX(), maxX = rect.getMaxX();
-    float minY = rect.getMinY(), maxY = rect.getMaxY();
-    tmp.push_back({{minX, minY, maxX, minY}, distX}); // bottom
-    tmp.push_back({{maxX, minY, maxX, maxY}, distX}); // right
-    tmp.push_back({{maxX, maxY, minX, maxY}, distX}); // top
-    tmp.push_back({{minX, maxY, minX, minY}, distX}); // left
+    std::vector<bridge::HitFace> objectFaces;
+    if (radius > 0.f) {
+      objectFaces.push_back(
+          {bridge::FACE_CIRCLE, cat, 0, cx, cy, radius, 0.f});
+    } else {
+      std::vector<cocos2d::CCPoint> vertices;
+      if (go->getType() == GameObjectType::Slope) {
+        // Slopes are triangular hitboxes. GD stores their orientation in
+        // m_slopeDirection / m_slopeUphill and computes the diagonal with
+        // slopeYPos(); OBB2D only describes the enclosing rectangle.
+        bool floorTop = go->slopeFloorTop();
+        bool wallLeft = go->slopeWallLeft();
+        float floorY = floorTop ? maxY : minY;
+        float wallX = wallLeft ? minX : maxX;
+        float tipY = static_cast<float>(go->slopeYPos(wallX));
+        if (tipY < minY || tipY > maxY || tipY == floorY)
+          tipY = floorTop ? minY : maxY;
+        vertices = {{minX, floorY}, {maxX, floorY}, {wallX, tipY}};
+      } else {
+        // Preserve GD's oriented rectangular hitbox for other objects.
+        go->updateOrientedBox();
+        auto *obb = go->getOrientedBox();
+        if (obb) {
+          for (auto &point : obb->m_corners)
+            vertices.push_back(point);
+        } else {
+          vertices = {{minX, minY}, {maxX, minY}, {maxX, maxY}, {minX, maxY}};
+        }
+      }
+      // The shared face list is edge-based, so any polygon can be sent as
+      // consecutive vertex pairs without changing the Python protocol.
+      for (size_t i = 0; i < vertices.size(); ++i) {
+        auto &a = vertices[i];
+        auto &b = vertices[(i + 1) % vertices.size()];
+        objectFaces.push_back(
+            {bridge::FACE_FLAT, cat, 0, a.x, a.y, b.x, b.y});
+      }
+    }
+    if (!objectFaces.empty())
+      tmp.push_back({std::move(objectFaces), distX});
   }
 
-  size_t count = std::min<size_t>(tmp.size(), bridge::MAX_FACES);
-  std::nth_element(tmp.begin(), tmp.begin() + count, tmp.end(),
-                   [](const Tmp &a, const Tmp &b) { return a.dist < b.dist; });
-  for (size_t i = 0; i < count; ++i)
-    d->faces[i] = tmp[i].face;
+  std::sort(tmp.begin(), tmp.end(),
+            [](const Tmp &a, const Tmp &b) { return a.dist < b.dist; });
+  size_t count = 0;
+  for (const auto &object : tmp) {
+    if (count + object.faces.size() > bridge::MAX_FACES)
+      continue;
+    for (const auto &face : object.faces)
+      d->faces[count++] = face;
+  }
 
   // release-style barrier so Python never sees a torn write
   std::atomic_thread_fence(std::memory_order_release);
