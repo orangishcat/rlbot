@@ -1,0 +1,15 @@
+{
+	"geode": "5.11.2",
+	"gd": {
+		"win": "2.2081",
+		"android": "2.2081",
+		"mac": "2.2081",
+		"ios": "2.2081"
+	},
+	"id": "orangishcat.rlbot",
+	"name": "rlbot",
+	"version": "v0.1.0",
+	"developer": "orangishcat",
+	"description": "RL bot plays GD",
+	"dependencies": {}
+}

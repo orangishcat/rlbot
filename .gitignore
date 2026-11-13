@@ -1,0 +1,32 @@
+# Build folders
+build/
+build-*/
+/cmake-build-*/
+out/
+
+# Visual Studio Code
+.vscode/
+.history/
+*.code-workspace
+
+# Visual Studio
+.vs/
+
+# CLion
+.idea/
+
+# Zed
+.zed/
+
+# Sublime Text
+*.sublime-workspace
+
+# CMake presets
+CMakeUserPresets.json
+
+# MacOS
+.DS_Store
+
+# Other
+.cache/
+__pycache__/
