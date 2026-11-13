@@ -5,7 +5,6 @@ from bridge import (
     CAT_INTERACT,
     CAT_SOLID,
     FACE_CIRCLE,
-    GAMEMODE_NAMES,
     Bridge,
 )
 
@@ -89,7 +88,7 @@ class ControlGUI:
         def fmt(p):
             if not p.present:
                 return "nonexistent"
-            mode = p.gamemode_name or "?"
+            mode = p.gamemode.name.lower()
             g = "up" if p.gravity_flipped else "down"
             return f"{mode:6s} x={p.x:8.1f} y={p.y:8.1f} rot={p.angle:7.1f} grav={g}"
 
@@ -99,7 +98,8 @@ class ControlGUI:
                 f"P1  {fmt(b.p1)}\n"
                 f"P2  {fmt(b.p2)}\n"
                 f"two-player: {b.two_player}   faces: {len(b.faces)}   "
-                f"fresh: {b.state_fresh}"
+                f"fresh: {b.state_fresh}\n"
+                f"attempt: {b.attempt_ms / 1000:.2f}s"
             )
         )
 

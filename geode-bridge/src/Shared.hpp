@@ -18,7 +18,7 @@
 namespace bridge {
 
 constexpr uint32_t MAGIC = 0x52424447; // "GDBR" little-endian
-constexpr uint32_t VERSION = 2;
+constexpr uint32_t VERSION = 3;
 constexpr int MAX_FACES = 1000;
 
 // HitFace::kind
@@ -32,18 +32,24 @@ inline constexpr uint8_t CAT_HAZARD = 1; // kills the player (spikes, saws)
 inline constexpr uint8_t CAT_INTERACT =
     2; // interactible (portals, pads, orbs, coins)
 
-// cube, ship, ball, ufo, wave, robot, spider, swing
-// all false -> gamemode nonexistent
-inline constexpr const char *GAMEMODE_NAMES[8] = {
-    "cube", "ship", "ball", "ufo", "wave", "robot", "spider", "swing"};
+enum class GameMode : uint8_t {
+  Cube,
+  Ship,
+  Ball,
+  Ufo,
+  Wave,
+  Robot,
+  Spider,
+  Swing,
+};
 
 struct PlayerState {
-  uint8_t gamemode[8];
+  GameMode gamemode;
   uint8_t gravityFlipped; // 1 = upside down
   uint8_t present;        // 0 = nonexistent (e.g. dual off)
-  uint16_t _pad;
+  uint8_t _pad;
   float x, y, angle;
-}; // 24 bytes
+}; // 16 bytes
 
 struct HitFace {
   uint8_t kind;     // FACE_FLAT or FACE_CIRCLE
@@ -60,6 +66,7 @@ struct SharedLayout {
   uint64_t inputSeq;  // Python -> C++, bumped after each input write
   uint32_t twoPlayer; // level is 2 player
   uint32_t faceCount;
+  uint32_t attemptMs; // time since current attempt started
   PlayerState p1;
   PlayerState p2;
   HitFace faces[MAX_FACES]; // nearest hitbox faces of interactible/collideable
@@ -72,7 +79,7 @@ struct SharedLayout {
 inline constexpr size_t OFFSET_FACES = offsetof(SharedLayout, faces);
 inline constexpr size_t OFFSET_INPUTS = offsetof(SharedLayout, p1Held);
 inline constexpr size_t TOTAL_SIZE = sizeof(SharedLayout);
-static_assert(sizeof(PlayerState) == 24);
+static_assert(sizeof(PlayerState) == 16);
 static_assert(sizeof(HitFace) == 20);
 
 inline std::string bridgePath() {

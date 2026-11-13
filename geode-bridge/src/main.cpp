@@ -30,23 +30,31 @@ static double inputTimestamp() {
       .count();
 }
 
+static bridge::GameMode gameModeOf(PlayerObject *player) {
+  if (player->m_isShip)
+    return bridge::GameMode::Ship;
+  if (player->m_isBall)
+    return bridge::GameMode::Ball;
+  if (player->m_isBird)
+    return bridge::GameMode::Ufo;
+  if (player->m_isDart)
+    return bridge::GameMode::Wave;
+  if (player->m_isRobot)
+    return bridge::GameMode::Robot;
+  if (player->m_isSpider)
+    return bridge::GameMode::Spider;
+  if (player->m_isSwing)
+    return bridge::GameMode::Swing;
+  return bridge::GameMode::Cube;
+}
+
 static void fillPlayer(bridge::PlayerState &out, PlayerObject *player,
                        bool present) {
   out = bridge::PlayerState{};
   out.present = present ? 1 : 0;
   if (!present || !player)
     return;
-  out.gamemode[0] =
-      !(player->m_isShip || player->m_isBall || player->m_isBird ||
-        player->m_isDart || player->m_isRobot || player->m_isSpider ||
-        player->m_isSwing);
-  out.gamemode[1] = player->m_isShip;
-  out.gamemode[2] = player->m_isBall;
-  out.gamemode[3] = player->m_isBird; // ufo
-  out.gamemode[4] = player->m_isDart; // wave
-  out.gamemode[5] = player->m_isRobot;
-  out.gamemode[6] = player->m_isSpider;
-  out.gamemode[7] = player->m_isSwing;
+  out.gamemode = gameModeOf(player);
   out.gravityFlipped = player->m_isUpsideDown;
   auto pos = player->getPosition();
   out.x = pos.x;
@@ -125,6 +133,7 @@ static void writeState(PlayLayer *pl) {
 
   d->twoPlayer =
       (pl->m_levelSettings && pl->m_levelSettings->m_twoPlayerMode) ? 1 : 0;
+  d->attemptMs = static_cast<uint32_t>(pl->m_attemptTime * 1000.0);
 
   // nearest faces: real hitbox faces (flat segments or circles) of nearby
   // interactible/collideable objects

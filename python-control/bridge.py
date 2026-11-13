@@ -7,13 +7,14 @@ import collections
 import os
 import struct
 import time
+from enum import IntEnum
 
 BRIDGE_PATH = os.path.expanduser(
     "~/Library/Application Support/GeometryDash/rlbot_bridge.bin"
 )
 
 MAGIC = 0x52424447  # "GDBR"
-VERSION = 2
+VERSION = 3
 MAX_FACES = 1000
 
 # HitFace.kind
@@ -25,12 +26,22 @@ CAT_SOLID = 0  # collideable, harmless (blocks, slopes)
 CAT_HAZARD = 1  # kills the player (spikes, saws)
 CAT_INTERACT = 2  # interactible (portals, pads, orbs, coins)
 
-GAMEMODE_NAMES = ("cube", "ship", "ball", "ufo", "wave", "robot", "spider", "swing")
 
-# header: magic, version, state_seq, input_seq, two_player, face_count
-HEADER = struct.Struct("<IIQQII")
-HEADER_SIZE = HEADER.size  # 32
-PLAYER = struct.Struct("<8BBBH3f")  # 24 bytes
+class GameMode(IntEnum):
+    CUBE = 0
+    SHIP = 1
+    BALL = 2
+    UFO = 3
+    WAVE = 4
+    ROBOT = 5
+    SPIDER = 6
+    SWING = 7
+
+
+# header: magic, version, state_seq, input_seq, two_player, face_count, attempt_ms
+HEADER = struct.Struct("<IIQQIII")
+HEADER_SIZE = HEADER.size  # 36
+PLAYER = struct.Struct("<BBBx3f")  # 16 bytes: gamemode, gravity, present, pad, x, y, angle
 FACE = struct.Struct("<BB2x4f")  # 20 bytes, pad skipped
 FACES_OFFSET = HEADER_SIZE + PLAYER.size * 2  # 80
 INPUTS_OFFSET = FACES_OFFSET + FACE.size * MAX_FACES
@@ -48,17 +59,10 @@ class PlayerState:
     __slots__ = ("gamemode", "gravity_flipped", "present", "x", "y", "angle")
 
     def __init__(self):
-        self.gamemode = {name: False for name in GAMEMODE_NAMES}
+        self.gamemode = GameMode.CUBE
         self.gravity_flipped = False
         self.present = False
         self.x = self.y = self.angle = 0.0
-
-    @property
-    def gamemode_name(self):
-        for name in GAMEMODE_NAMES:
-            if self.gamemode[name]:
-                return name
-        return None
 
 
 class Bridge:
@@ -70,6 +74,7 @@ class Bridge:
         self.p1 = PlayerState()
         self.p2 = PlayerState()
         self.two_player = False
+        self.attempt_ms = 0
         self.faces = []  # list of Face, nearest hitbox faces
         self.state_fresh = False
 
@@ -112,7 +117,9 @@ class Bridge:
         """Read one stable state snapshot. Returns True if new data arrived."""
         if not self._mm:
             return False
-        magic, version, seq, _, two, face_count = HEADER.unpack_from(self._mm)
+        magic, version, seq, _, two, face_count, attempt_ms = HEADER.unpack_from(
+            self._mm
+        )
         if magic != MAGIC or version != VERSION:
             self.state_fresh = False
             return False
@@ -126,6 +133,7 @@ class Bridge:
         self._last_state_seq = seq
         self.state_fresh = True
         self.two_player = bool(two)
+        self.attempt_ms = attempt_ms
 
         self._read_player(self.p1, HEADER_SIZE)
         self._read_player(self.p2, HEADER_SIZE + PLAYER.size)
@@ -138,13 +146,11 @@ class Bridge:
         return True
 
     def _read_player(self, player: PlayerState, offset: int):
-        vals = PLAYER.unpack_from(self._mm, offset)
-        player.gamemode = {
-            GAMEMODE_NAMES[i]: bool(vals[i]) for i in range(len(GAMEMODE_NAMES))
-        }
-        player.gravity_flipped = bool(vals[8])
-        player.present = bool(vals[9])
-        player.x, player.y, player.angle = vals[11], vals[12], vals[13]
+        gamemode, gravity, present, x, y, angle = PLAYER.unpack_from(self._mm, offset)
+        player.gamemode = GameMode(gamemode)
+        player.gravity_flipped = bool(gravity)
+        player.present = bool(present)
+        player.x, player.y, player.angle = x, y, angle
 
     # -- writing --------------------------------------------------------
 
@@ -156,9 +162,19 @@ class Bridge:
             self._mm, INPUTS_OFFSET, 1 if p1_held else 0, 1 if p2_held else 0
         )
         # re-read header, bump input_seq
-        magic, version, state_seq, input_seq, two, count = HEADER.unpack_from(self._mm)
+        magic, version, state_seq, input_seq, two, count, attempt_ms = (
+            HEADER.unpack_from(self._mm)
+        )
         HEADER.pack_into(
-            self._mm, 0, magic, version, state_seq, input_seq + 1, two, count
+            self._mm,
+            0,
+            magic,
+            version,
+            state_seq,
+            input_seq + 1,
+            two,
+            count,
+            attempt_ms,
         )
 
     def close(self):
