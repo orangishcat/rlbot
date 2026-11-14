@@ -14,7 +14,7 @@ BRIDGE_PATH = os.path.expanduser(
 )
 
 MAGIC = 0x52424447  # "GDBR"
-VERSION = 3
+VERSION = 4
 MAX_FACES = 1000
 
 # HitFace.kind
@@ -41,13 +41,24 @@ class GameMode(IntEnum):
 # header: magic, version, state_seq, input_seq, two_player, face_count, attempt_ms
 HEADER = struct.Struct("<IIQQIII")
 HEADER_SIZE = HEADER.size  # 36
-PLAYER = struct.Struct("<BBBx3f")  # 16 bytes: gamemode, gravity, present, pad, x, y, angle
+PLAYER = struct.Struct(
+    "<BBBx3f"
+)  # 16 bytes: gamemode, gravity, present, pad, x, y, angle
 FACE = struct.Struct("<BB2x4f")  # 20 bytes, pad skipped
 FACES_OFFSET = HEADER_SIZE + PLAYER.size * 2  # 80
 INPUTS_OFFSET = FACES_OFFSET + FACE.size * MAX_FACES
 TOTAL_SIZE = INPUTS_OFFSET + 8
 
-INPUTS = struct.Struct("<BB6x")
+INPUTS = struct.Struct("<BB")
+
+# -- frame stepping control (after the inputs, 4 bytes of padding) --
+BYTE = struct.Struct("<B")
+U32 = struct.Struct("<I")
+STEP_MODE_OFFSET = INPUTS_OFFSET + 2
+PLAYER_DESTROYED_OFFSET = INPUTS_OFFSET + 3
+STEP_REQ_OFFSET = INPUTS_OFFSET + 8
+STEP_DONE_OFFSET = INPUTS_OFFSET + 12
+TOTAL_SIZE = STEP_DONE_OFFSET + 4
 
 # (kind, category, x1, y1, x2, y2)
 Face = collections.namedtuple(
@@ -77,6 +88,10 @@ class Bridge:
         self.attempt_ms = 0
         self.faces = []  # list of Face, nearest hitbox faces
         self.state_fresh = False
+        self.step_mode = False
+        self.player_destroyed = False
+        self.step_req = 0
+        self.step_done = 0
 
     # -- connection -----------------------------------------------------
 
@@ -134,6 +149,10 @@ class Bridge:
         self.state_fresh = True
         self.two_player = bool(two)
         self.attempt_ms = attempt_ms
+        self.step_mode = bool(snap[STEP_MODE_OFFSET])
+        self.player_destroyed = bool(snap[PLAYER_DESTROYED_OFFSET])
+        self.step_req = U32.unpack_from(snap, STEP_REQ_OFFSET)[0]
+        self.step_done = U32.unpack_from(snap, STEP_DONE_OFFSET)[0]
 
         self._read_player(self.p1, HEADER_SIZE)
         self._read_player(self.p2, HEADER_SIZE + PLAYER.size)
@@ -176,6 +195,20 @@ class Bridge:
             count,
             attempt_ms,
         )
+
+    def set_step_mode(self, on: bool):
+        """Tell the mod whether frame stepping is active. Enabling it makes
+        the mod restart the level and freeze its own clock until stepped."""
+        if not self._mm:
+            return
+        BYTE.pack_into(self._mm, STEP_MODE_OFFSET, 1 if on else 0)
+
+    def request_steps(self, n: int):
+        """Request n physics ticks (only has an effect while step mode is on)."""
+        if not self._mm:
+            return
+        req = U32.unpack_from(self._mm, STEP_REQ_OFFSET)[0]
+        U32.pack_into(self._mm, STEP_REQ_OFFSET, req + n)
 
     def close(self):
         self.set_inputs(False, False)

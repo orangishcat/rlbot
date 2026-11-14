@@ -18,7 +18,7 @@
 namespace bridge {
 
 constexpr uint32_t MAGIC = 0x52424447; // "GDBR" little-endian
-constexpr uint32_t VERSION = 3;
+constexpr uint32_t VERSION = 4;
 constexpr int MAX_FACES = 1000;
 
 // HitFace::kind
@@ -73,7 +73,12 @@ struct SharedLayout {
                             // objects
   uint8_t p1Held;
   uint8_t p2Held;
-  uint8_t _pad[6];
+  // -- frame stepping control --
+  uint8_t stepMode; // Python -> C++: 1 while frame stepping is active
+  uint8_t playerDestroyed; // C++ -> Python: 1 since the last attempt reset
+  uint8_t _pad[4];
+  uint32_t stepReq;  // Python -> C++: total physics ticks requested
+  uint32_t stepDone; // C++ -> Python: total physics ticks simulated
 };
 
 inline constexpr size_t OFFSET_FACES = offsetof(SharedLayout, faces);
@@ -81,6 +86,11 @@ inline constexpr size_t OFFSET_INPUTS = offsetof(SharedLayout, p1Held);
 inline constexpr size_t TOTAL_SIZE = sizeof(SharedLayout);
 static_assert(sizeof(PlayerState) == 16);
 static_assert(sizeof(HitFace) == 20);
+// keep in sync with python-control/bridge.py offsets
+static_assert(offsetof(SharedLayout, stepMode) == OFFSET_INPUTS + 2);
+static_assert(offsetof(SharedLayout, playerDestroyed) == OFFSET_INPUTS + 3);
+static_assert(offsetof(SharedLayout, stepReq) == OFFSET_INPUTS + 8);
+static_assert(offsetof(SharedLayout, stepDone) == OFFSET_INPUTS + 12);
 
 inline std::string bridgePath() {
   // Must match python-control/bridge.py BRIDGE_PATH

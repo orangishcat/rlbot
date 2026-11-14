@@ -48,6 +48,27 @@ class ControlGUI:
         root.bind("<KeyPress-Shift_L>", lambda e: self.set_p2(True))
         root.bind("<KeyRelease-Shift_L>", lambda e: self.set_p2(False))
 
+        controls = tk.Frame(root)
+        controls.pack(fill=tk.X, pady=2)
+        self.step_enabled = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            controls,
+            text="frame stepping (240 tps)",
+            variable=self.step_enabled,
+        ).pack(side=tk.LEFT, padx=4)
+        self.step_btn = tk.Button(
+            controls, text="step ×1 (t)", width=11, state=tk.DISABLED,
+            command=lambda: self._request_steps(1),
+        )
+        self.step_btn.pack(side=tk.LEFT, padx=4)
+        self.step10_btn = tk.Button(
+            controls, text="step ×10 (T)", width=11, state=tk.DISABLED,
+            command=lambda: self._request_steps(10),
+        )
+        self.step10_btn.pack(side=tk.LEFT, padx=4)
+        root.bind("<KeyPress-t>", lambda e: self._request_steps(1))
+        root.bind("<KeyPress-T>", lambda e: self._request_steps(10))
+
         self._reconnect()
         root.after(16, self._tick)
 
@@ -80,9 +101,18 @@ class ControlGUI:
         if self.bridge.connected:
             self.bridge.poll()
             self.bridge.set_inputs(self.p1_held, self.p2_held)
+            self.bridge.set_step_mode(self.step_enabled.get())
+            stepping = self.step_enabled.get()
+            step_state = tk.NORMAL if stepping else tk.DISABLED
+            self.step_btn.configure(state=step_state)
+            self.step10_btn.configure(state=step_state)
             self._update_info()
             self._draw()
         self.root.after(16, self._tick)
+
+    def _request_steps(self, n: int):
+        if self.bridge.connected and self.step_enabled.get():
+            self.bridge.request_steps(n)
 
     def _update_info(self):
         def fmt(p):
@@ -99,7 +129,10 @@ class ControlGUI:
                 f"P2  {fmt(b.p2)}\n"
                 f"two-player: {b.two_player}   faces: {len(b.faces)}   "
                 f"fresh: {b.state_fresh}\n"
-                f"attempt: {b.attempt_ms / 1000:.2f}s"
+                f"attempt: {b.attempt_ms / 1000:.2f}s   "
+                f"destroyed: {'yes' if b.player_destroyed else 'no'}\n"
+                f"steps: req={b.step_req} done={b.step_done}   mode: "
+                f"{'frame stepping' if b.step_mode else 'realtime'}"
             )
         )
 

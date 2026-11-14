@@ -1,4 +1,5 @@
 #include <Geode/Geode.hpp>
+#include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 
 #include "Shared.hpp"
@@ -17,6 +18,8 @@ static bool g_shmFailed = false;
 // last input state we applied, so we only queue on change (255 = unknown)
 static uint8_t g_lastP1 = 255;
 static uint8_t g_lastP2 = 255;
+// step mode as seen by the mod, to detect off -> on transitions
+static bool g_lastStepMode = false;
 static std::chrono::steady_clock::time_point g_levelStart;
 static bool g_levelStartSet = false;
 
@@ -134,6 +137,8 @@ static void writeState(PlayLayer *pl) {
   d->twoPlayer =
       (pl->m_levelSettings && pl->m_levelSettings->m_twoPlayerMode) ? 1 : 0;
   d->attemptMs = static_cast<uint32_t>(pl->m_attemptTime * 1000.0);
+  // set by destroyPlayer, cleared by the game's object reset
+  d->playerDestroyed = pl->m_player1->m_isDead ? 1 : 0;
 
   // nearest faces: real hitbox faces (flat segments or circles) of nearby
   // interactible/collideable objects
@@ -262,6 +267,9 @@ static void applyInputs(PlayLayer *pl) {
 
 class $modify(BridgePlayLayer, PlayLayer) {
   void postUpdate(float dt) {
+    if (g_shm.ready() && g_shm.data()->stepMode)
+      return; // frame stepping owns physics (see BridgePhysics::update)
+
     if (!g_shm.ready()) {
       if (!g_shmFailed) {
         g_shmFailed = !g_shm.ensure();
@@ -280,6 +288,49 @@ class $modify(BridgePlayLayer, PlayLayer) {
 
     if (g_shm.ready()) {
       writeState(this);
+    }
+  }
+
+};
+
+// Frame-stepping gate. While stepMode is set, the game's own clock is blocked
+// and every tick Python requested via stepReq is simulated with a fixed dt of
+// 1/240 (TPS-240 equivalent), with state written back after each tick so
+// Python can read the new hitboxes before requesting the next one.
+class $modify(BridgePhysics, GJBaseGameLayer) {
+  void update(float dt) {
+    auto *pl = typeinfo_cast<PlayLayer *>(this);
+    if (!pl || !g_shm.ready()) {
+      GJBaseGameLayer::update(dt);
+      return;
+    }
+    auto *d = g_shm.data();
+
+    if (d->stepMode != g_lastStepMode) {
+      if (d->stepMode) {
+        // entering step mode: restart the attempt so Python starts clean
+        pl->resetLevel();
+        d->stepReq = 0;
+        d->stepDone = 0;
+        g_lastP1 = g_lastP2 = 255;
+        writeState(pl);
+      }
+      g_lastStepMode = d->stepMode;
+    }
+
+    if (!d->stepMode) {
+      GJBaseGameLayer::update(dt);
+      return;
+    }
+
+    // drain requested ticks; capped per render frame so a runaway request
+    // count can't freeze the game (the rest drains over the next frames)
+    uint32_t guard = 0;
+    while (d->stepDone != d->stepReq && guard++ < 4096) {
+      applyInputs(pl);
+      GJBaseGameLayer::update(1.f / 240.f); // one physics tick
+      d->stepDone++;
+      writeState(pl);
     }
   }
 };
