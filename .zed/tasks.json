@@ -1,0 +1,32 @@
+[
+  {
+    "label": "build mod",
+    "command": "cmake --build build --target rlbot_PACKAGE",
+    "cwd": "$ZED_WORKTREE_ROOT/geode-bridge",
+    "env": {
+      "GEODE_SDK": "/Users/orangishcat/.local/share/Geode/sdk",
+    },
+  },
+  {
+    "label": "run game",
+    "command": "open \"steam://run/322170\"",
+  },
+  {
+    "label": "build and run",
+    "command": "pkill 'Geometry Dash' || true && cmake --build build --target rlbot_PACKAGE && open \"steam://run/322170\"",
+    "cwd": "$ZED_WORKTREE_ROOT/geode-bridge",
+    "env": {
+      "GEODE_SDK": "/Users/orangishcat/.local/share/Geode/sdk",
+    },
+  },
+  {
+    "label": "run control gui",
+    "command": "uv run python main.py",
+    "cwd": "$ZED_WORKTREE_ROOT/python-control",
+  },
+  {
+    "label": "invalidate shared memory package (macos only)",
+    "command": "trash rlbot_bridge.bin",
+    "cwd": "~/Library/Application Support/GeometryDash",
+  },
+]

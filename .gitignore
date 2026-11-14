@@ -15,9 +15,6 @@ out/
 # CLion
 .idea/
 
-# Zed
-.zed/
-
 # Sublime Text
 *.sublime-workspace
 
