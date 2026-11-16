@@ -21,7 +21,7 @@
   },
   {
     "label": "run control gui",
-    "command": "uv run python main.py",
+    "command": "uv run python gui.py",
     "cwd": "$ZED_WORKTREE_ROOT/python-control",
   },
   {
