@@ -1,8 +1,9 @@
+from enum import IntEnum
+
 import gymnasium as gym
 import numpy as np
 
-import bridge
-from bridge import FaceCategory, FaceKind, GameMode, GdBridge
+from bridge import GdBridge
 
 FACE_SLOTS = 1000
 
@@ -24,6 +25,11 @@ MAX_PLAYERS = 2
 # ------------------------------------------------
 
 
+def onehot(enum: IntEnum):
+    return np.eye(len(type(enum)), enum)
+
+
+# custom env documentation: https://gymnasium.farama.org/introduction/create_custom_env/
 class GdEnv(gym.Env):
     observation_space = gym.spaces.Dict(
         {
@@ -51,13 +57,12 @@ class GdEnv(gym.Env):
         )
 
     def _get_obs(self):
-        # remember to poll
         return {
             "players": np.fromiter(
                 (
                     np.concat(
                         (
-                            np.eye(len(GameMode))[p.gamemode],
+                            onehot(p.gamemode),
                             [p.x, p.y, p.vel_x, p.vel_y, p.size_x, p.size_y],
                         )
                     )
@@ -68,16 +73,16 @@ class GdEnv(gym.Env):
             "faces": np.fromiter(
                 (
                     np.concat(
-                        (
-                            np.eye(len(FaceKind))[f.kind],
-                            np.eye(len(FaceCategory))[f.category],
-                        )
+                        (onehot(f.kind), onehot(f.category), [f.x1, f.y1, f.x2, f.y2])
                     )
                     for f in self.bridge.faces
                 ),
                 dtype=np.float32,
             ),
         }
+
+    def _get_info(self):
+        return {"progress": self.bridge.attempt_ms / 1000}
 
 
 gym.register(id="GeometryDash", entry_point=GdEnv, max_episode_steps=100)  # pyright: ignore[reportArgumentType]
