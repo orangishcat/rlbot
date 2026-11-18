@@ -103,7 +103,7 @@ class Bridge:
         self.p2 = PlayerState()
         self.two_player = False
         self.attempt_ms = 0
-        self.faces = []  # list of Face, nearest hitbox faces
+        self.faces: list[Face] = []  # list of Face, nearest hitbox faces
         self.state_fresh = False
         self.step_mode = False
         self.player_destroyed = False
@@ -188,6 +188,7 @@ class Bridge:
         return True
 
     def _read_player(self, player: PlayerState, offset: int):
+        assert self._mm is not None
         gamemode, gravity, present, x, y, angle = PLAYER.unpack_from(self._mm, offset)
         player.gamemode = GameMode(gamemode)
         player.gravity_flipped = bool(gravity)
