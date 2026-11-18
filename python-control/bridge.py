@@ -38,6 +38,12 @@ class GameMode(IntEnum):
     SWING = 7
 
 
+class FaceKind(IntEnum): ...
+
+
+class FaceCategory(IntEnum): ...
+
+
 # header: magic, version, state_seq, input_seq, two_player, face_count, attempt_ms
 HEADER = struct.Struct("<IIQQIII")
 HEADER_SIZE = HEADER.size  # 36
@@ -84,7 +90,18 @@ TOTAL_SIZE = CMD_NAME_OFFSET + CMD_NAME_LEN
 
 
 class PlayerState:
-    __slots__ = ("gamemode", "gravity_flipped", "present", "x", "y", "angle")
+    __slots__ = (
+        "gamemode",
+        "gravity_flipped",
+        "present",
+        "x",
+        "y",
+        "angle",
+        "vel_x",
+        "vel_y",
+        "size_x",
+        "size_y",
+    )
 
     def __init__(self):
         self.gamemode = GameMode.CUBE
@@ -93,7 +110,7 @@ class PlayerState:
         self.x = self.y = self.angle = 0.0
 
 
-class Bridge:
+class GdBridge:
     """Reads game state written by the Geode mod, writes inputs for it."""
 
     def __init__(self):

@@ -5,14 +5,14 @@ from bridge import (
     CAT_HAZARD,
     CAT_INTERACT,
     CAT_SOLID,
-    CMD_NOT_FOUND,
     CMD_NO_LEVEL,
+    CMD_NOT_FOUND,
     CMD_OK,
     CMD_OPEN_LEVEL,
     CMD_RESTART,
     CMD_UNKNOWN,
     FACE_CIRCLE,
-    Bridge,
+    GdBridge,
 )
 
 FACE_COLORS = {
@@ -24,7 +24,7 @@ FACE_COLORS = {
 
 class ControlGUI:
     def __init__(self, root: tk.Tk):
-        self.bridge = Bridge()
+        self.bridge = GdBridge()
         self.root = root
         root.title("rlbot control")
         root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -64,12 +64,18 @@ class ControlGUI:
             variable=self.step_enabled,
         ).pack(side=tk.LEFT, padx=4)
         self.step_btn = tk.Button(
-            controls, text="step ×1 (t)", width=11, state=tk.DISABLED,
+            controls,
+            text="step ×1 (t)",
+            width=11,
+            state=tk.DISABLED,
             command=lambda: self._request_steps(1),
         )
         self.step_btn.pack(side=tk.LEFT, padx=4)
         self.step10_btn = tk.Button(
-            controls, text="step ×10 (T)", width=11, state=tk.DISABLED,
+            controls,
+            text="step ×10 (T)",
+            width=11,
+            state=tk.DISABLED,
             command=lambda: self._request_steps(10),
         )
         self.step10_btn.pack(side=tk.LEFT, padx=4)
@@ -79,11 +85,15 @@ class ControlGUI:
         actions = tk.Frame(root)
         actions.pack(fill=tk.X, pady=2)
         tk.Button(
-            actions, text="restart (r)", width=11,
+            actions,
+            text="restart (r)",
+            width=11,
             command=self.restart_level,
         ).pack(side=tk.LEFT, padx=4)
         tk.Button(
-            actions, text="open level (o)", width=14,
+            actions,
+            text="open level (o)",
+            width=14,
             command=self.open_level,
         ).pack(side=tk.LEFT, padx=4)
         root.bind("<KeyPress-r>", lambda e: self.restart_level())
@@ -141,14 +151,12 @@ class ControlGUI:
     def open_level(self):
         if not self.bridge.connected:
             return
-        name = simpledialog.askstring(
-            "open level", "level name:", parent=self.root
-        )
+        name = simpledialog.askstring("open level", "level name:", parent=self.root)
         if name and name.strip():
             self.bridge.request_command(CMD_OPEN_LEVEL, name.strip())
 
     @staticmethod
-    def _cmd_text(b: Bridge) -> str:
+    def _cmd_text(b: GdBridge) -> str:
         if b.cmd_req == 0:
             return "idle"
         if b.cmd_done != b.cmd_req:
