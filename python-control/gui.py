@@ -1,9 +1,16 @@
 import tkinter as tk
+from tkinter import simpledialog
 
 from bridge import (
     CAT_HAZARD,
     CAT_INTERACT,
     CAT_SOLID,
+    CMD_NOT_FOUND,
+    CMD_NO_LEVEL,
+    CMD_OK,
+    CMD_OPEN_LEVEL,
+    CMD_RESTART,
+    CMD_UNKNOWN,
     FACE_CIRCLE,
     Bridge,
 )
@@ -69,6 +76,19 @@ class ControlGUI:
         root.bind("<KeyPress-t>", lambda e: self._request_steps(1))
         root.bind("<KeyPress-T>", lambda e: self._request_steps(10))
 
+        actions = tk.Frame(root)
+        actions.pack(fill=tk.X, pady=2)
+        tk.Button(
+            actions, text="restart (r)", width=11,
+            command=self.restart_level,
+        ).pack(side=tk.LEFT, padx=4)
+        tk.Button(
+            actions, text="open level (o)", width=14,
+            command=self.open_level,
+        ).pack(side=tk.LEFT, padx=4)
+        root.bind("<KeyPress-r>", lambda e: self.restart_level())
+        root.bind("<KeyPress-o>", lambda e: self.open_level())
+
         self._reconnect()
         root.after(16, self._tick)
 
@@ -114,6 +134,32 @@ class ControlGUI:
         if self.bridge.connected and self.step_enabled.get():
             self.bridge.request_steps(n)
 
+    def restart_level(self):
+        if self.bridge.connected:
+            self.bridge.request_command(CMD_RESTART)
+
+    def open_level(self):
+        if not self.bridge.connected:
+            return
+        name = simpledialog.askstring(
+            "open level", "level name:", parent=self.root
+        )
+        if name and name.strip():
+            self.bridge.request_command(CMD_OPEN_LEVEL, name.strip())
+
+    @staticmethod
+    def _cmd_text(b: Bridge) -> str:
+        if b.cmd_req == 0:
+            return "idle"
+        if b.cmd_done != b.cmd_req:
+            return "running..."
+        return {
+            CMD_OK: "ok",
+            CMD_NOT_FOUND: "level not found",
+            CMD_NO_LEVEL: "not in a level",
+            CMD_UNKNOWN: "unknown command",
+        }.get(b.cmd_status, f"status {b.cmd_status}")
+
     def _update_info(self):
         def fmt(p):
             if not p.present:
@@ -132,7 +178,8 @@ class ControlGUI:
                 f"attempt: {b.attempt_ms / 1000:.2f}s   "
                 f"destroyed: {'yes' if b.player_destroyed else 'no'}\n"
                 f"steps: req={b.step_req} done={b.step_done}   mode: "
-                f"{'frame stepping' if b.step_mode else 'realtime'}"
+                f"{'frame stepping' if b.step_mode else 'realtime'}\n"
+                f"cmd: {self._cmd_text(b)}"
             )
         )
 

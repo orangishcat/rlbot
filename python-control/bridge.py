@@ -14,7 +14,7 @@ BRIDGE_PATH = os.path.expanduser(
 )
 
 MAGIC = 0x52424447  # "GDBR"
-VERSION = 4
+VERSION = 5
 MAX_FACES = 1000
 
 # HitFace.kind
@@ -65,6 +65,23 @@ Face = collections.namedtuple(
     "Face", "kind category x1 y1 x2 y2", defaults=(0, 0, 0.0, 0.0, 0.0, 0.0)
 )
 
+# -- command channel (after stepDone) --
+# commands
+CMD_RESTART = 1
+CMD_OPEN_LEVEL = 2
+# status codes
+CMD_OK = 0
+CMD_NOT_FOUND = 1  # no level with that name
+CMD_NO_LEVEL = 2  # not inside a playable level
+CMD_UNKNOWN = 3  # unrecognized command id
+CMD_NAME_LEN = 64  # includes NUL terminator
+CMD_REQ_OFFSET = STEP_DONE_OFFSET + 4  # INPUTS_OFFSET + 16
+CMD_DONE_OFFSET = CMD_REQ_OFFSET + 4
+CMD_OFFSET = CMD_DONE_OFFSET + 4
+CMD_STATUS_OFFSET = CMD_OFFSET + 1
+CMD_NAME_OFFSET = CMD_STATUS_OFFSET + 3
+TOTAL_SIZE = CMD_NAME_OFFSET + CMD_NAME_LEN
+
 
 class PlayerState:
     __slots__ = ("gamemode", "gravity_flipped", "present", "x", "y", "angle")
@@ -92,6 +109,9 @@ class Bridge:
         self.player_destroyed = False
         self.step_req = 0
         self.step_done = 0
+        self.cmd_req = 0
+        self.cmd_done = 0
+        self.cmd_status = CMD_OK
 
     # -- connection -----------------------------------------------------
 
@@ -153,6 +173,9 @@ class Bridge:
         self.player_destroyed = bool(snap[PLAYER_DESTROYED_OFFSET])
         self.step_req = U32.unpack_from(snap, STEP_REQ_OFFSET)[0]
         self.step_done = U32.unpack_from(snap, STEP_DONE_OFFSET)[0]
+        self.cmd_req = U32.unpack_from(snap, CMD_REQ_OFFSET)[0]
+        self.cmd_done = U32.unpack_from(snap, CMD_DONE_OFFSET)[0]
+        self.cmd_status = snap[CMD_STATUS_OFFSET]
 
         self._read_player(self.p1, HEADER_SIZE)
         self._read_player(self.p2, HEADER_SIZE + PLAYER.size)
@@ -209,6 +232,22 @@ class Bridge:
             return
         req = U32.unpack_from(self._mm, STEP_REQ_OFFSET)[0]
         U32.pack_into(self._mm, STEP_REQ_OFFSET, req + n)
+
+    def request_command(self, cmd: int, name: str = ""):
+        """Send a command to the mod (CMD_RESTART or CMD_OPEN_LEVEL).
+
+        The result ends up in cmd_status once cmd_done catches up to cmd_req.
+        """
+        if not self._mm:
+            return
+        raw = name.encode()[: CMD_NAME_LEN - 1]
+        self._mm[CMD_NAME_OFFSET : CMD_NAME_OFFSET + CMD_NAME_LEN] = raw.ljust(
+            CMD_NAME_LEN, b"\0"
+        )
+        BYTE.pack_into(self._mm, CMD_OFFSET, cmd)
+        BYTE.pack_into(self._mm, CMD_STATUS_OFFSET, CMD_OK)
+        req = U32.unpack_from(self._mm, CMD_REQ_OFFSET)[0]
+        U32.pack_into(self._mm, CMD_REQ_OFFSET, req + 1)
 
     def close(self):
         self.set_inputs(False, False)

@@ -1,12 +1,16 @@
 #include <Geode/Geode.hpp>
+#include <Geode/binding/GameLevelManager.hpp>
+#include <Geode/binding/LocalLevelManager.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 
 #include "Shared.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -18,6 +22,8 @@ static bool g_shmFailed = false;
 // last input state we applied, so we only queue on change (255 = unknown)
 static uint8_t g_lastP1 = 255;
 static uint8_t g_lastP2 = 255;
+// last command request handled, so a deferred open isn't re-queued every frame
+static uint32_t g_lastCmdReq = 0;
 // step mode as seen by the mod, to detect off -> on transitions
 static bool g_lastStepMode = false;
 static std::chrono::steady_clock::time_point g_levelStart;
@@ -265,6 +271,101 @@ static void applyInputs(PlayLayer *pl) {
   }
 }
 
+static std::string toLower(std::string s) {
+  std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return s;
+}
+
+// Case-insensitive lookup of a saved level by name: local levels first, then
+// cached/downloaded levels.
+static GJGameLevel *findLevelByName(const std::string &query) {
+  std::string q = toLower(query);
+  auto *llm = LocalLevelManager::sharedState();
+  if (llm) {
+    for (auto *lvl : CCArrayExt<GJGameLevel *>(llm->m_localLevels)) {
+      if (lvl && toLower(lvl->m_levelName) == q)
+        return lvl;
+    }
+  }
+  auto *glm = GameLevelManager::sharedState();
+  if (glm) {
+    CCDictElement *el = nullptr;
+    CCDictElement *next = nullptr;
+    HASH_ITER(hh, glm->m_onlineLevels->m_pElements, el, next) {
+      auto *lvl = typeinfo_cast<GJGameLevel *>(el->getObject());
+      if (lvl && toLower(lvl->m_levelName) == q)
+        return lvl;
+    }
+  }
+  return nullptr;
+}
+
+// Must run on the main thread (called via queueInMainThread): opening a level
+// replaces the current scene.
+static void executeOpenLevel(const std::string &name, uint32_t req) {
+  auto *d = g_shm.data();
+  auto *lvl = findLevelByName(name);
+  if (!lvl) {
+    d->cmdStatus = bridge::CMD_STATUS_NOT_FOUND;
+    d->cmdDone = req;
+    return;
+  }
+  auto *pl = PlayLayer::create(lvl, false, false);
+  if (!pl) {
+    d->cmdStatus = bridge::CMD_STATUS_NO_LEVEL;
+    d->cmdDone = req;
+    return;
+  }
+  auto *scene = CCScene::create();
+  scene->addChild(pl);
+  CCDirector::sharedDirector()->replaceScene(scene);
+  // fresh attempt state: re-queue held inputs and reset the input clock
+  g_lastP1 = g_lastP2 = 255;
+  g_levelStartSet = false;
+  d->cmdStatus = bridge::CMD_STATUS_OK;
+  d->cmdDone = req;
+}
+
+// Drain the command channel. Needs pl for restarts; CMD_OPEN_LEVEL works
+// without one (e.g. from the editor). Returns true if a command was claimed.
+static bool handleCommands(PlayLayer *pl) {
+  auto *d = g_shm.data();
+  if (!d || d->cmdDone == d->cmdReq || d->cmdReq == g_lastCmdReq)
+    return false;
+  g_lastCmdReq = d->cmdReq;
+
+  uint8_t cmd = d->cmd;
+  std::string name(d->cmdName, strnlen(d->cmdName, bridge::CMD_NAME_LEN));
+  uint32_t req = d->cmdReq;
+
+  if (cmd == bridge::CMD_RESTART) {
+    if (pl) {
+      pl->resetLevel();
+      g_lastP1 = g_lastP2 = 255;
+      d->cmdStatus = bridge::CMD_STATUS_OK;
+      writeState(pl);
+    } else {
+      d->cmdStatus = bridge::CMD_STATUS_NO_LEVEL;
+    }
+    d->cmdDone = req;
+    return true;
+  }
+
+  if (cmd == bridge::CMD_OPEN_LEVEL) {
+    // scene changes must not happen mid-update
+    Loader::get()->queueInMainThread([name, req] {
+      executeOpenLevel(name, req);
+    });
+    return true;
+  }
+
+  d->cmdStatus = bridge::CMD_STATUS_UNKNOWN;
+  d->cmdDone = req;
+  return true;
+}
+
 class $modify(BridgePlayLayer, PlayLayer) {
   void postUpdate(float dt) {
     if (g_shm.ready() && g_shm.data()->stepMode)
@@ -300,11 +401,18 @@ class $modify(BridgePlayLayer, PlayLayer) {
 class $modify(BridgePhysics, GJBaseGameLayer) {
   void update(float dt) {
     auto *pl = typeinfo_cast<PlayLayer *>(this);
-    if (!pl || !g_shm.ready()) {
+    if (!g_shm.ready()) {
       GJBaseGameLayer::update(dt);
       return;
     }
     auto *d = g_shm.data();
+
+    handleCommands(pl);
+
+    if (!pl) {
+      GJBaseGameLayer::update(dt);
+      return;
+    }
 
     if (d->stepMode != g_lastStepMode) {
       if (d->stepMode) {

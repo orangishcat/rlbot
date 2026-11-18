@@ -18,7 +18,7 @@
 namespace bridge {
 
 constexpr uint32_t MAGIC = 0x52424447; // "GDBR" little-endian
-constexpr uint32_t VERSION = 4;
+constexpr uint32_t VERSION = 5;
 constexpr int MAX_FACES = 1000;
 
 // HitFace::kind
@@ -31,6 +31,16 @@ inline constexpr uint8_t CAT_SOLID =
 inline constexpr uint8_t CAT_HAZARD = 1; // kills the player (spikes, saws)
 inline constexpr uint8_t CAT_INTERACT =
     2; // interactible (portals, pads, orbs, coins)
+
+// command channel ids (Python -> C++)
+inline constexpr uint8_t CMD_RESTART = 1;    // restart the current attempt
+inline constexpr uint8_t CMD_OPEN_LEVEL = 2; // open a saved level by name
+// command status codes (C++ -> Python)
+inline constexpr uint8_t CMD_STATUS_OK = 0;
+inline constexpr uint8_t CMD_STATUS_NOT_FOUND = 1; // no level with that name
+inline constexpr uint8_t CMD_STATUS_NO_LEVEL = 2;  // not inside a playable level
+inline constexpr uint8_t CMD_STATUS_UNKNOWN = 3;   // unrecognized command id
+inline constexpr int CMD_NAME_LEN = 64;            // includes NUL terminator
 
 enum class GameMode : uint8_t {
   Cube,
@@ -79,6 +89,13 @@ struct SharedLayout {
   uint8_t _pad[4];
   uint32_t stepReq;  // Python -> C++: total physics ticks requested
   uint32_t stepDone; // C++ -> Python: total physics ticks simulated
+  // -- command channel --
+  uint32_t cmdReq;   // Python -> C++: total commands requested
+  uint32_t cmdDone;  // C++ -> Python: total commands processed
+  uint8_t cmd;       // last requested command id (CMD_*)
+  uint8_t cmdStatus; // result of the last processed command (CMD_STATUS_*)
+  uint8_t _pad2[2];
+  char cmdName[CMD_NAME_LEN]; // NUL-terminated level name for CMD_OPEN_LEVEL
 };
 
 inline constexpr size_t OFFSET_FACES = offsetof(SharedLayout, faces);
@@ -91,6 +108,11 @@ static_assert(offsetof(SharedLayout, stepMode) == OFFSET_INPUTS + 2);
 static_assert(offsetof(SharedLayout, playerDestroyed) == OFFSET_INPUTS + 3);
 static_assert(offsetof(SharedLayout, stepReq) == OFFSET_INPUTS + 8);
 static_assert(offsetof(SharedLayout, stepDone) == OFFSET_INPUTS + 12);
+static_assert(offsetof(SharedLayout, cmdReq) == OFFSET_INPUTS + 16);
+static_assert(offsetof(SharedLayout, cmdDone) == OFFSET_INPUTS + 20);
+static_assert(offsetof(SharedLayout, cmd) == OFFSET_INPUTS + 24);
+static_assert(offsetof(SharedLayout, cmdStatus) == OFFSET_INPUTS + 25);
+static_assert(offsetof(SharedLayout, cmdName) == OFFSET_INPUTS + 28);
 
 inline std::string bridgePath() {
   // Must match python-control/bridge.py BRIDGE_PATH
