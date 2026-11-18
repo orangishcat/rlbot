@@ -257,9 +257,26 @@ class GdBridge:
     def request_steps(self, n: int):
         """Request n physics ticks (only has an effect while step mode is on)."""
         if not self._mm:
-            return
+            return None
         req = U32.unpack_from(self._mm, STEP_REQ_OFFSET)[0]
-        U32.pack_into(self._mm, STEP_REQ_OFFSET, req + n)
+        U32.pack_into(self._mm, STEP_REQ_OFFSET, target := (req + n))
+        return target
+
+    def wait_steps(self, n: int, timeout: float = 5.0) -> bool:
+        """Request n physics ticks and block until the mod has executed them.
+        Only completes while step mode is on. True if all n finished in time."""
+        if not self._mm:
+            return False
+        target = self.request_steps(n)
+        assert target is not None
+        start = time.perf_counter()
+        while time.perf_counter() - start < timeout:
+            self.poll()
+            if self.step_done >= target:
+                return True
+            time.sleep(0.005)
+        warnings.warn("Waiting for steps timed out")
+        return False
 
     def request_command(self, cmd: int, name: str = "") -> int | None:
         """Send a command to the mod (CMD_RESTART or CMD_OPEN_LEVEL).
