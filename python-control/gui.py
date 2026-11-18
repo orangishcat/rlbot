@@ -6,11 +6,9 @@ from bridge import (
     CAT_INTERACT,
     CAT_SOLID,
     CMD_NO_LEVEL,
-    CMD_NOT_DEAD,
     CMD_NOT_FOUND,
     CMD_OK,
     CMD_OPEN_LEVEL,
-    CMD_RESPAWN,
     CMD_RESTART,
     CMD_UNKNOWN,
     FACE_CIRCLE,
@@ -98,14 +96,7 @@ class ControlGUI:
             width=14,
             command=self.open_level,
         ).pack(side=tk.LEFT, padx=4)
-        tk.Button(
-            actions,
-            text="respawn (n)",
-            width=11,
-            command=self.respawn,
-        ).pack(side=tk.LEFT, padx=4)
         root.bind("<KeyPress-r>", lambda e: self.restart_level())
-        root.bind("<KeyPress-n>", lambda e: self.respawn())
         root.bind("<KeyPress-o>", lambda e: self.open_level())
 
         self._reconnect()
@@ -157,10 +148,6 @@ class ControlGUI:
         if self.bridge.connected:
             self.bridge.request_command(CMD_RESTART)
 
-    def respawn(self):
-        if self.bridge.connected:
-            self.bridge.request_command(CMD_RESPAWN)
-
     def open_level(self):
         if not self.bridge.connected:
             return
@@ -179,7 +166,6 @@ class ControlGUI:
             CMD_NOT_FOUND: "level not found",
             CMD_NO_LEVEL: "not in a level",
             CMD_UNKNOWN: "unknown command",
-            CMD_NOT_DEAD: "player not dead",
         }.get(b.cmd_status, f"status {b.cmd_status}")
 
     def _update_info(self):

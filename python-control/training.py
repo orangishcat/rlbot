@@ -1,9 +1,11 @@
 from enum import IntEnum
+from typing import Any
 
 import gymnasium as gym
 import numpy as np
+from gymnasium.utils.env_checker import check_env
 
-from bridge import GdBridge
+from bridge import CMD_RESTART, GdBridge
 
 FACE_SLOTS = 1000
 
@@ -84,12 +86,24 @@ class GdEnv(gym.Env):
     def _get_info(self):
         return {"progress": self.bridge.attempt_ms / 1000}
 
+    def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
+        # IMPORTANT: Must call this first to seed the random number generator
+        super().reset(seed=seed)
+        self.bridge.wait_cmd(CMD_RESTART)
+
+        observation = self._get_obs()
+        info = self._get_info()
+        return observation, info
+
+    def step(self, action): ...
+
 
 gym.register(id="GeometryDash", entry_point=GdEnv, max_episode_steps=100)  # pyright: ignore[reportArgumentType]
 
 
 def main():
     gd_env = gym.make("GeometryDash")
+    assert check_env(gd_env), "GD environment is invalid"
 
 
 if __name__ == "main":

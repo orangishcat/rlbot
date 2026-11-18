@@ -35,8 +35,6 @@ inline constexpr uint8_t CAT_INTERACT =
 // command channel ids (Python -> C++)
 inline constexpr uint8_t CMD_RESTART = 1;    // restart the current attempt
 inline constexpr uint8_t CMD_OPEN_LEVEL = 2; // open a saved level by name
-inline constexpr uint8_t CMD_RESPAWN =
-    3; // set the destroy timer to zero, respawning the player instantly
 // command status codes (C++ -> Python)
 inline constexpr uint8_t CMD_STATUS_OK = 0;
 inline constexpr uint8_t CMD_STATUS_NOT_FOUND = 1; // no level with that name

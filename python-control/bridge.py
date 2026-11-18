@@ -7,6 +7,7 @@ import collections
 import os
 import struct
 import time
+import warnings
 from enum import IntEnum
 
 BRIDGE_PATH = os.path.expanduser(
@@ -78,13 +79,11 @@ Face = collections.namedtuple(
 # commands
 CMD_RESTART = 1
 CMD_OPEN_LEVEL = 2
-CMD_RESPAWN = 3  # cancel the destroy timer and respawn now
 # status codes
 CMD_OK = 0
 CMD_NOT_FOUND = 1  # no level with that name
 CMD_NO_LEVEL = 2  # not inside a playable level
 CMD_UNKNOWN = 3  # unrecognized command id
-CMD_NOT_DEAD = 4  # player is alive, nothing to respawn
 CMD_NAME_LEN = 64  # includes NUL terminator
 CMD_REQ_OFFSET = STEP_DONE_OFFSET + 4  # INPUTS_OFFSET + 16
 CMD_DONE_OFFSET = CMD_REQ_OFFSET + 4
@@ -262,21 +261,38 @@ class GdBridge:
         req = U32.unpack_from(self._mm, STEP_REQ_OFFSET)[0]
         U32.pack_into(self._mm, STEP_REQ_OFFSET, req + n)
 
-    def request_command(self, cmd: int, name: str = ""):
+    def request_command(self, cmd: int, name: str = "") -> int | None:
         """Send a command to the mod (CMD_RESTART or CMD_OPEN_LEVEL).
 
-        The result ends up in cmd_status once cmd_done catches up to cmd_req.
+        Returns the request number; cmd_done == that number once the mod acks it.
         """
         if not self._mm:
-            return
+            return None
         raw = name.encode()[: CMD_NAME_LEN - 1]
         self._mm[CMD_NAME_OFFSET : CMD_NAME_OFFSET + CMD_NAME_LEN] = raw.ljust(
             CMD_NAME_LEN, b"\0"
         )
         BYTE.pack_into(self._mm, CMD_OFFSET, cmd)
         BYTE.pack_into(self._mm, CMD_STATUS_OFFSET, CMD_OK)
-        req = U32.unpack_from(self._mm, CMD_REQ_OFFSET)[0]
-        U32.pack_into(self._mm, CMD_REQ_OFFSET, req + 1)
+        req = U32.unpack_from(self._mm, CMD_REQ_OFFSET)[0] + 1
+        U32.pack_into(self._mm, CMD_REQ_OFFSET, req)
+        return req
+
+    def wait_cmd(
+        self, cmd: int, name: str = "", timeout: float = 5.0, log: bool = False
+    ) -> bool:
+        """Send a command and block until the mod acks it. True if it succeeded."""
+        req = self.request_command(cmd, name)
+        start = time.perf_counter()
+        while (elapsed := time.perf_counter() - start) < timeout:
+            self.poll()
+            if self.cmd_done == req:
+                if log:
+                    print(f"Command {cmd} took {elapsed * 1e3:.2f}ms")
+                return self.cmd_status == CMD_OK
+            time.sleep(0.005)
+        warnings.warn("Waiting for command execution timed out")
+        return False
 
     def close(self):
         self.set_inputs(False, False)
