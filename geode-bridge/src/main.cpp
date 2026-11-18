@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <utility>
@@ -57,6 +58,12 @@ static bridge::GameMode gameModeOf(PlayerObject *player) {
   return bridge::GameMode::Cube;
 }
 
+static float dist(const cocos2d::CCPoint &a, const cocos2d::CCPoint &b) {
+  float dx = a.x - b.x;
+  float dy = a.y - b.y;
+  return std::sqrt(dx * dx + dy * dy);
+}
+
 static void fillPlayer(bridge::PlayerState &out, PlayerObject *player,
                        bool present) {
   out = bridge::PlayerState{};
@@ -68,7 +75,21 @@ static void fillPlayer(bridge::PlayerState &out, PlayerObject *player,
   auto pos = player->getPosition();
   out.x = pos.x;
   out.y = pos.y;
-  out.angle = player->getRotation();
+  // hitbox size from the player's own oriented box (the game keeps it
+  // current); consecutive corner distances are the box's side lengths and
+  // are rotation-independent
+  if (auto *obb = player->getOrientedBox()) {
+    auto &c = obb->m_corners;
+    out.sizeX = dist(c[0], c[1]);
+    out.sizeY = dist(c[1], c[2]);
+  }
+  if (out.sizeX <= 0.f || out.sizeY <= 0.f) {
+    // fallback: GD's 30x30 base hitbox scaled by the icon (mini = 0.6)
+    out.sizeX = 30.f * player->getScaleX();
+    out.sizeY = 30.f * player->getScaleY();
+  }
+  out.velX = player->getCurrentXVelocity();
+  out.velY = player->getYVelocity();
 }
 
 // category for a gameplay object; 255 = not interactible/collideable, skip.

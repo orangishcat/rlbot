@@ -18,7 +18,7 @@
 namespace bridge {
 
 constexpr uint32_t MAGIC = 0x52424447; // "GDBR" little-endian
-constexpr uint32_t VERSION = 5;
+constexpr uint32_t VERSION = 7;
 constexpr int MAX_FACES = 1000;
 
 // HitFace::kind
@@ -58,8 +58,12 @@ struct PlayerState {
   uint8_t gravityFlipped; // 1 = upside down
   uint8_t present;        // 0 = nonexistent (e.g. dual off)
   uint8_t _pad;
-  float x, y, angle;
-}; // 16 bytes
+  float x, y;    // player center (getPosition)
+  float sizeX;   // hitbox size, from the player's oriented box
+  float sizeY;
+  float velX;    // player velocity (getCurrentXVelocity / getYVelocity)
+  float velY;
+}; // 28 bytes
 
 struct HitFace {
   uint8_t kind;     // FACE_FLAT or FACE_CIRCLE
@@ -101,7 +105,7 @@ struct SharedLayout {
 inline constexpr size_t OFFSET_FACES = offsetof(SharedLayout, faces);
 inline constexpr size_t OFFSET_INPUTS = offsetof(SharedLayout, p1Held);
 inline constexpr size_t TOTAL_SIZE = sizeof(SharedLayout);
-static_assert(sizeof(PlayerState) == 16);
+static_assert(sizeof(PlayerState) == 28);
 static_assert(sizeof(HitFace) == 20);
 // keep in sync with python-control/bridge.py offsets
 static_assert(offsetof(SharedLayout, stepMode) == OFFSET_INPUTS + 2);

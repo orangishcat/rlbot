@@ -14,17 +14,26 @@ BRIDGE_PATH = os.path.expanduser(
 )
 
 MAGIC = 0x52424447  # "GDBR"
-VERSION = 5
+VERSION = 6
 MAX_FACES = 1000
 
-# HitFace.kind
-FACE_FLAT = 0  # line segment (x1, y1) - (x2, y2)
-FACE_CIRCLE = 1  # circle at (x1, y1) with radius x2
 
-# HitFace.category
-CAT_SOLID = 0  # collideable, harmless (blocks, slopes)
-CAT_HAZARD = 1  # kills the player (spikes, saws)
-CAT_INTERACT = 2  # interactible (portals, pads, orbs, coins)
+class FaceKind(IntEnum):
+    FLAT = 0  # line segment (x1, y1) - (x2, y2)
+    CIRCLE = 1  # circle at (x1, y1) with radius x2
+
+
+class FaceCategory(IntEnum):
+    SOLID = 0  # collideable, harmless (blocks, slopes)
+    HAZARD = 1  # kills the player (spikes, saws)
+    INTERACT = 2  # interactible (portals, pads, orbs, coins)
+
+
+FACE_FLAT = FaceKind.FLAT
+FACE_CIRCLE = FaceKind.CIRCLE
+CAT_SOLID = FaceCategory.SOLID
+CAT_HAZARD = FaceCategory.HAZARD
+CAT_INTERACT = FaceCategory.INTERACT
 
 
 class GameMode(IntEnum):
@@ -38,18 +47,12 @@ class GameMode(IntEnum):
     SWING = 7
 
 
-class FaceKind(IntEnum): ...
-
-
-class FaceCategory(IntEnum): ...
-
-
 # header: magic, version, state_seq, input_seq, two_player, face_count, attempt_ms
 HEADER = struct.Struct("<IIQQIII")
 HEADER_SIZE = HEADER.size  # 36
 PLAYER = struct.Struct(
-    "<BBBx3f"
-)  # 16 bytes: gamemode, gravity, present, pad, x, y, angle
+    "<BBBx6f"
+)  # 28 bytes: gamemode, gravity, present, pad, x, y, size_x, size_y, vel_x, vel_y
 FACE = struct.Struct("<BB2x4f")  # 20 bytes, pad skipped
 FACES_OFFSET = HEADER_SIZE + PLAYER.size * 2  # 80
 INPUTS_OFFSET = FACES_OFFSET + FACE.size * MAX_FACES
@@ -96,18 +99,19 @@ class PlayerState:
         "present",
         "x",
         "y",
-        "angle",
-        "vel_x",
-        "vel_y",
         "size_x",
         "size_y",
+        "vel_x",
+        "vel_y",
     )
 
     def __init__(self):
         self.gamemode = GameMode.CUBE
         self.gravity_flipped = False
         self.present = False
-        self.x = self.y = self.angle = 0.0
+        self.x = self.y = 0.0
+        self.size_x = self.size_y = 0.0
+        self.vel_x = self.vel_y = 0.0
 
 
 class GdBridge:
@@ -199,18 +203,23 @@ class GdBridge:
 
         self.faces = []
         for i in range(min(face_count, MAX_FACES)):
-            self.faces.append(
-                Face(*FACE.unpack_from(snap, FACES_OFFSET + i * FACE.size))
+            kind, cat, x1, y1, x2, y2 = FACE.unpack_from(
+                snap, FACES_OFFSET + i * FACE.size
             )
+            self.faces.append(Face(FaceKind(kind), FaceCategory(cat), x1, y1, x2, y2))
         return True
 
     def _read_player(self, player: PlayerState, offset: int):
         assert self._mm is not None
-        gamemode, gravity, present, x, y, angle = PLAYER.unpack_from(self._mm, offset)
+        gamemode, gravity, present, x, y, size_x, size_y, vel_x, vel_y = (
+            PLAYER.unpack_from(self._mm, offset)
+        )
         player.gamemode = GameMode(gamemode)
         player.gravity_flipped = bool(gravity)
         player.present = bool(present)
-        player.x, player.y, player.angle = x, y, angle
+        player.x, player.y = x, y
+        player.size_x, player.size_y = size_x, size_y
+        player.vel_x, player.vel_y = vel_x, vel_y
 
     # -- writing --------------------------------------------------------
 

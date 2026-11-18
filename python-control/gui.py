@@ -174,7 +174,11 @@ class ControlGUI:
                 return "nonexistent"
             mode = p.gamemode.name.lower()
             g = "up" if p.gravity_flipped else "down"
-            return f"{mode:6s} x={p.x:8.1f} y={p.y:8.1f} rot={p.angle:7.1f} grav={g}"
+            return (
+                f"{mode:6s} x={p.x:8.1f} y={p.y:8.1f} grav={g} "
+                f"size={p.size_x:.1f}x{p.size_y:.1f} "
+                f"vel={p.vel_x:7.1f},{p.vel_y:7.1f}"
+            )
 
         b = self.bridge
         self.info.configure(
