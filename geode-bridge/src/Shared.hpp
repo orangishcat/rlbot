@@ -35,11 +35,14 @@ inline constexpr uint8_t CAT_INTERACT =
 // command channel ids (Python -> C++)
 inline constexpr uint8_t CMD_RESTART = 1;    // restart the current attempt
 inline constexpr uint8_t CMD_OPEN_LEVEL = 2; // open a saved level by name
+inline constexpr uint8_t CMD_RESPAWN =
+    3; // set the destroy timer to zero, respawning the player instantly
 // command status codes (C++ -> Python)
 inline constexpr uint8_t CMD_STATUS_OK = 0;
 inline constexpr uint8_t CMD_STATUS_NOT_FOUND = 1; // no level with that name
 inline constexpr uint8_t CMD_STATUS_NO_LEVEL = 2;  // not inside a playable level
 inline constexpr uint8_t CMD_STATUS_UNKNOWN = 3;   // unrecognized command id
+inline constexpr uint8_t CMD_STATUS_NOT_DEAD = 4;  // player is alive, nothing to respawn
 inline constexpr int CMD_NAME_LEN = 64;            // includes NUL terminator
 
 enum class GameMode : uint8_t {

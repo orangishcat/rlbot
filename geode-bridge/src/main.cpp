@@ -374,6 +374,22 @@ static bool handleCommands(PlayLayer *pl) {
     return true;
   }
 
+  if (cmd == bridge::CMD_RESPAWN) {
+    if (!pl) {
+      d->cmdStatus = bridge::CMD_STATUS_NO_LEVEL;
+    } else if (!pl->m_player1->m_isDead) {
+      d->cmdStatus = bridge::CMD_STATUS_NOT_DEAD;
+    } else {
+      // cancel the pending post-death reset and run it now
+      pl->unschedule(schedule_selector(PlayLayer::delayedResetLevel));
+      pl->delayedResetLevel();
+      d->cmdStatus = bridge::CMD_STATUS_OK;
+      writeState(pl);
+    }
+    d->cmdDone = req;
+    return true;
+  }
+
   if (cmd == bridge::CMD_OPEN_LEVEL) {
     // scene changes must not happen mid-update
     Loader::get()->queueInMainThread([name, req] {

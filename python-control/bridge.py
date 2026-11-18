@@ -78,11 +78,13 @@ Face = collections.namedtuple(
 # commands
 CMD_RESTART = 1
 CMD_OPEN_LEVEL = 2
+CMD_RESPAWN = 3  # cancel the destroy timer and respawn now
 # status codes
 CMD_OK = 0
 CMD_NOT_FOUND = 1  # no level with that name
 CMD_NO_LEVEL = 2  # not inside a playable level
 CMD_UNKNOWN = 3  # unrecognized command id
+CMD_NOT_DEAD = 4  # player is alive, nothing to respawn
 CMD_NAME_LEN = 64  # includes NUL terminator
 CMD_REQ_OFFSET = STEP_DONE_OFFSET + 4  # INPUTS_OFFSET + 16
 CMD_DONE_OFFSET = CMD_REQ_OFFSET + 4
