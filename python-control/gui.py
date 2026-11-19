@@ -214,17 +214,17 @@ class ControlGUI:
 
         s = self.SCALE
         for f in self.bridge.faces:
-            color = FACE_COLORS.get(f.category, "#888")
-            if f.kind == FACE_CIRCLE:
-                r = f.x2 * s
-                cx, cy = ox + f.x1 * s, oy - f.y1 * s
+            color = FACE_COLORS.get(f["category"], "#888")
+            if f["kind"] == FACE_CIRCLE:
+                r = f["x2"] * s
+                cx, cy = ox + f["x1"] * s, oy - f["y1"] * s
                 c.create_oval(cx - r, cy - r, cx + r, cy + r, outline=color, width=2)
             else:
                 c.create_line(
-                    ox + f.x1 * s,
-                    oy - f.y1 * s,
-                    ox + f.x2 * s,
-                    oy - f.y2 * s,
+                    ox + f["x1"] * s,
+                    oy - f["y1"] * s,
+                    ox + f["x2"] * s,
+                    oy - f["y2"] * s,
                     fill=color,
                     width=1,
                 )

@@ -5,9 +5,25 @@ from gymnasium.utils.env_checker import check_env
 from shapely import LineString, box
 from shapely.geometry import Point
 
-from bridge import CMD_RESTART, FACE_FLAT, Face, GdBridge
+from bridge import (
+    CMD_RESTART,
+    FACE_FLAT,
+    GdBridge,
+    MAX_FACES,
+    FaceCategory,
+    FaceKind,
+    GameMode,
+)
 
 from .globals import *
+
+assert FACE_SLOTS == MAX_FACES, "training FACE_SLOTS must match bridge MAX_FACES"
+assert FACE_FEATURES == len(FaceKind) + len(FaceCategory) + 5, (
+    "kind one-hot + category one-hot + x1, y1, x2, y2 + present"
+)
+assert PLAYER_FEATURES == len(GameMode) + 3 + 2, (
+    "gamemode one-hot + y, vel_x, vel_y + gravity_flipped, present"
+)
 
 
 # custom env documentation: https://gymnasium.farama.org/introduction/create_custom_env/
@@ -39,29 +55,42 @@ class GdEnv(gym.Env):
         )
 
     def _get_obs(self):
-        return {
-            "players": np.fromiter(
-                (
-                    np.concat(
-                        (
-                            onehot(p.gamemode),
-                            [p.x, p.y, p.vel_x, p.vel_y, p.size_x, p.size_y],
-                        )
+        px, py = self.bridge.p1.x, self.bridge.p1.y
+        return {"players": self._player_obs(py), "faces": self._face_obs(px, py)}
+
+    def _player_obs(self, py: float) -> np.ndarray:
+        return np.array(
+            [
+                np.concatenate(
+                    (
+                        onehot(p.gamemode),
+                        [p.y - py, p.vel_x, p.vel_y],
+                        [p.gravity_flipped, p.present],
                     )
-                    for p in (self.bridge.p1, self.bridge.p2)
-                ),
-                dtype=np.float32,
-            ),
-            "faces": np.fromiter(
-                (
-                    np.concat(
-                        (onehot(f.kind), onehot(f.category), [f.x1, f.y1, f.x2, f.y2])
-                    )
-                    for f in self.bridge.faces
-                ),
-                dtype=np.float32,
-            ),
-        }
+                )
+                for p in (self.bridge.p1, self.bridge.p2)
+            ],
+            dtype=np.float32,
+        )
+
+    def _face_obs(self, px: float, py: float) -> np.ndarray:
+        # fixed shape: unused rows are all zero, i.e. present = 0
+        out = np.zeros((FACE_SLOTS, FACE_FEATURES), dtype=np.float32)
+        faces = self.bridge.faces
+        n = len(faces)
+        if not n:
+            return out
+        rows = np.arange(n)
+        kind_end = len(FaceKind)
+        coords = kind_end + len(FaceCategory)
+        out[rows, faces["kind"]] = 1
+        out[rows, kind_end + faces["category"]] = 1
+        out[:n, coords] = faces["x1"] - px
+        out[:n, coords + 1] = faces["y1"] - py
+        out[:n, coords + 2] = faces["x2"] - px
+        out[:n, coords + 3] = faces["y2"] - py
+        out[:n, FACE_FEATURES - 1] = 1  # present
+        return out
 
     def _get_info(self):
         return {"progress": self.bridge.attempt_ms / 1000}
@@ -75,11 +104,18 @@ class GdEnv(gym.Env):
         return self._get_obs(), self._get_info()
 
     @staticmethod
-    def dist_betw(face: Face, player_points: list[float]):
+    def dist_betw(face: np.void, player_points: list[float]):
         player_box = box(*player_points)  # pyright: ignore
-        if face.kind == FACE_FLAT:
-            return LineString([face.x1, face.y1, face.x2, face.y2]).distance(player_box)
-        return player_box.distance(Point(face.x1, face.y1).buffer(face.y1))
+        if face["kind"] == FACE_FLAT:
+            return LineString(
+                [
+                    (float(face["x1"]), float(face["y1"])),
+                    (float(face["x2"]), float(face["y2"])),
+                ]
+            ).distance(player_box)
+        return player_box.distance(
+            Point(float(face["x1"]), float(face["y1"])).buffer(float(face["x2"]))
+        )
 
     def step(self, action: list[bool]):
         reward = self.bridge.attempt_ms / 1000

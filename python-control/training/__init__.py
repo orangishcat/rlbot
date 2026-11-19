@@ -1,1 +1,2 @@
-from environment import *
+from .environment import *
+from .model import *

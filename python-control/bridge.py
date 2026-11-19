@@ -3,12 +3,13 @@
 MIRRORS geode-bridge/src/Shared.hpp -- keep in sync.
 """
 
-import collections
 import os
 import struct
 import time
 import warnings
 from enum import IntEnum
+
+import numpy as np
 
 BRIDGE_PATH = os.path.expanduser(
     "~/Library/Application Support/GeometryDash/rlbot_bridge.bin"
@@ -55,6 +56,17 @@ PLAYER = struct.Struct(
     "<BBBx6f"
 )  # 28 bytes: gamemode, gravity, present, pad, x, y, size_x, size_y, vel_x, vel_y
 FACE = struct.Struct("<BB2x4f")  # 20 bytes, pad skipped
+
+# numpy mirror of FACE, given explicit offsets to match the C layout
+FACE_DTYPE = np.dtype(
+    {
+        "names": ["kind", "category", "x1", "y1", "x2", "y2"],
+        "formats": ["u1", "u1", "<f4", "<f4", "<f4", "<f4"],
+        "offsets": [0, 1, 4, 8, 12, 16],
+    }
+)
+assert FACE_DTYPE.itemsize == FACE.size
+
 FACES_OFFSET = HEADER_SIZE + PLAYER.size * 2  # 80
 INPUTS_OFFSET = FACES_OFFSET + FACE.size * MAX_FACES
 TOTAL_SIZE = INPUTS_OFFSET + 8
@@ -69,11 +81,6 @@ PLAYER_DESTROYED_OFFSET = INPUTS_OFFSET + 3
 STEP_REQ_OFFSET = INPUTS_OFFSET + 8
 STEP_DONE_OFFSET = INPUTS_OFFSET + 12
 TOTAL_SIZE = STEP_DONE_OFFSET + 4
-
-# (kind, category, x1, y1, x2, y2)
-Face = collections.namedtuple(
-    "Face", "kind category x1 y1 x2 y2", defaults=(0, 0, 0.0, 0.0, 0.0, 0.0)
-)
 
 # -- command channel (after stepDone) --
 # commands
@@ -125,7 +132,8 @@ class GdBridge:
         self.p2 = PlayerState()
         self.two_player = False
         self.attempt_ms = 0
-        self.faces: list[Face] = []  # list of Face, nearest hitbox faces
+        self._faces = np.zeros(MAX_FACES, dtype=FACE_DTYPE)
+        self.face_count = 0
         self.state_fresh = False
         self.step_mode = False
         self.player_destroyed = False
@@ -202,13 +210,20 @@ class GdBridge:
         self._read_player(self.p1, HEADER_SIZE)
         self._read_player(self.p2, HEADER_SIZE + PLAYER.size)
 
-        self.faces = []
-        for i in range(min(face_count, MAX_FACES)):
-            kind, cat, x1, y1, x2, y2 = FACE.unpack_from(
-                snap, FACES_OFFSET + i * FACE.size
+        self.face_count = min(face_count, MAX_FACES)
+        if self.face_count:
+            self._faces[: self.face_count] = np.frombuffer(
+                snap, FACE_DTYPE, self.face_count, FACES_OFFSET
             )
-            self.faces.append(Face(FaceKind(kind), FaceCategory(cat), x1, y1, x2, y2))
         return True
+
+    @property
+    def faces(self) -> np.ndarray:
+        """This frame's face records, in shared-memory layout.
+
+        A view into a reused buffer: read it before the next poll, do not retain it.
+        """
+        return self._faces[: self.face_count]
 
     def _read_player(self, player: PlayerState, offset: int):
         assert self._mm is not None

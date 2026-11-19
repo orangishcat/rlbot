@@ -12,8 +12,8 @@ FACE_SLOTS = 1000
 # boolean present (1 feature); since the model must receive inputs with fixed shape, some faces will be blank
 FACE_FEATURES = 10
 
-# one hot for gamemode CUBE, SHIP, BALL, UFO, WAVE, ROBOT, SPIDER, SWING (7 features)
-# floats for x, y, x velocity, y velocity (4 features)
+# one hot for gamemode CUBE, SHIP, BALL, UFO, WAVE, ROBOT, SPIDER, SWING (8 features)
+# floats for y, x velocity, y velocity (3 features) (no x because player x is treated as zero)
 # boolean for gravity_flipped (1 feature)
 # boolean for present (for player 2; not present unless in dual)  (1 feature)
 PLAYER_FEATURES = 13
@@ -22,5 +22,5 @@ MAX_PLAYERS = 2
 # ------------------------------------------------
 
 
-def onehot(enum: IntEnum):
-    return np.eye(len(type(enum)), enum)
+def onehot(enum: IntEnum) -> np.ndarray:
+    return np.eye(len(type(enum)))[enum]
