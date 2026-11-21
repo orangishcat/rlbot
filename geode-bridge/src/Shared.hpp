@@ -19,7 +19,7 @@ namespace bridge {
 
 constexpr uint32_t MAGIC = 0x52424447; // "GDBR" little-endian
 constexpr uint32_t VERSION = 1;
-constexpr int MAX_FACES = 1000;
+constexpr int MAX_FACES = 128;
 
 // HitFace::kind
 inline constexpr uint8_t FACE_FLAT = 0;   // line segment (x1,y1)-(x2,y2)

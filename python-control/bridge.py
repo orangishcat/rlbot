@@ -17,7 +17,7 @@ BRIDGE_PATH = os.path.expanduser(
 
 MAGIC = 0x52424447  # "GDBR"
 VERSION = 1
-MAX_FACES = 1000
+MAX_FACES = 128
 
 
 class FaceKind(IntEnum):
@@ -67,7 +67,7 @@ FACE_DTYPE = np.dtype(
 )
 assert FACE_DTYPE.itemsize == FACE.size
 
-FACES_OFFSET = HEADER_SIZE + PLAYER.size * 2  # 80
+FACES_OFFSET = HEADER_SIZE + PLAYER.size * 2  # 92
 INPUTS_OFFSET = FACES_OFFSET + FACE.size * MAX_FACES
 TOTAL_SIZE = INPUTS_OFFSET + 8
 
@@ -290,7 +290,6 @@ class GdBridge:
             self.poll()
             if self.step_done >= target:
                 return True
-            time.sleep(0.005)
         warnings.warn("Waiting for steps timed out")
         return False
 
@@ -323,7 +322,6 @@ class GdBridge:
                 if log:
                     print(f"Command {cmd} took {elapsed * 1e3:.2f}ms")
                 return self.cmd_status == CMD_OK
-            time.sleep(0.005)
         warnings.warn("Waiting for command execution timed out")
         return False
 

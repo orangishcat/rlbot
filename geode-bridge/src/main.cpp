@@ -376,9 +376,8 @@ static bool handleCommands(PlayLayer *pl) {
 
   if (cmd == bridge::CMD_OPEN_LEVEL) {
     // scene changes must not happen mid-update
-    Loader::get()->queueInMainThread([name, req] {
-      executeOpenLevel(name, req);
-    });
+    Loader::get()->queueInMainThread(
+        [name, req] { executeOpenLevel(name, req); });
     return true;
   }
 
@@ -412,7 +411,6 @@ class $modify(BridgePlayLayer, PlayLayer) {
       writeState(this);
     }
   }
-
 };
 
 // Frame-stepping gate. While stepMode is set, the game's own clock is blocked
@@ -457,7 +455,7 @@ class $modify(BridgePhysics, GJBaseGameLayer) {
     uint32_t guard = 0;
     while (d->stepDone != d->stepReq && guard++ < 4096) {
       applyInputs(pl);
-      GJBaseGameLayer::update(1.f / 240.f); // one physics tick
+      GJBaseGameLayer::update(1.f / 30.f); // one physics tick
       d->stepDone++;
       writeState(pl);
     }

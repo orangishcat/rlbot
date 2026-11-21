@@ -17,6 +17,9 @@ from bridge import (
 
 from .globals import *
 
+# seconds of game time per tick; matches the step size in geode-bridge/src/main.cpp
+TICK_SECONDS = 1 / 30
+
 assert FACE_SLOTS == MAX_FACES, "training FACE_SLOTS must match bridge MAX_FACES"
 assert FACE_FEATURES == len(FaceKind) + len(FaceCategory) + 5, (
     "kind one-hot + category one-hot + x1, y1, x2, y2 + present"
@@ -60,9 +63,7 @@ class GdEnv(gym.Env):
         return {
             "players": self._player_obs(py),
             "faces": self._face_obs(px, py),
-            "globals": np.array(
-                [self.bridge.attempt_ms / 1000], dtype=np.float32
-            ),
+            "globals": np.array([self.bridge.attempt_ms / 1000], dtype=np.float32),
         }
 
     def _player_obs(self, py: float) -> np.ndarray:
@@ -125,10 +126,7 @@ class GdEnv(gym.Env):
         )
 
     def step(self, action: list[bool]):
-        reward = self.bridge.attempt_ms / 1000
-        if action[0]:
-            reward -= 0.001  # encourage less clicks
-
+        reward = TICK_SECONDS
         player_coordinates = [
             [
                 p.x - p.size_x / 2,

@@ -9,6 +9,7 @@ from torch_geometric.nn.models.meta import MetaLayer
 from torch_geometric.utils import scatter
 
 from .globals import FACE_FEATURES, GLOBAL_FEATURES, MAX_PLAYERS, PLAYER_FEATURES
+from .json_log import JsonlOutputFormat
 
 # node: rel x1, rel y1, rel x2, rel y2, type
 NODE_FEATURES = 4 + 1
@@ -20,6 +21,8 @@ FEATURES_DIM = 128
 GNN_HIDDEN = 32
 # message passing rounds
 GNN_ROUNDS = 2
+# incoming edges per node: each node hears from its nearest neighbours only
+K_NEIGHBORS = 8
 
 # observation layout, from the comments in globals.py: the coordinates come right
 # after the one-hot blocks, and `present` is always the last column
@@ -131,7 +134,10 @@ class GdPolicy(RecurrentActorCriticPolicy):
     """
 
     def evaluate_actions(self, obs, actions, *args, **kwargs):
-        if isinstance(self.action_space, gym.spaces.MultiBinary) and not actions.is_floating_point():
+        if (
+            isinstance(self.action_space, gym.spaces.MultiBinary)
+            and not actions.is_floating_point()
+        ):
             actions = actions.float()
         return super().evaluate_actions(obs, actions, *args, **kwargs)
 
@@ -172,7 +178,12 @@ class GdFeatureExtractor(BaseFeaturesExtractor):
 
         f_coords = faces[present_faces, FACE_COORDS : FACE_COORDS + 4]
         f_nodes = torch.cat(
-            [f_coords, torch.zeros((f_coords.shape[0], 1), dtype=f_coords.dtype, device=f_coords.device)],
+            [
+                f_coords,
+                torch.zeros(
+                    (f_coords.shape[0], 1), dtype=f_coords.dtype, device=f_coords.device
+                ),
+            ],
             dim=1,
         )
 
@@ -184,11 +195,16 @@ class GdFeatureExtractor(BaseFeaturesExtractor):
         player_rows = torch.full((MAX_PLAYERS,), -1, dtype=torch.long, device=x.device)
         player_rows[slots] = torch.arange(n_players, device=x.device)
 
-        # every ordered pair of distinct nodes, both directions
-        src = torch.arange(n, device=x.device).repeat_interleave(n)
-        dst = torch.arange(n, device=x.device).repeat(n)
-        keep = src != dst
-        src, dst = src[keep], dst[keep]
+        # each node receives from its K_NEIGHBORS nearest other nodes (by position)
+        k = min(K_NEIGHBORS, n - 1)
+        if k > 0:
+            dist_matrix = torch.cdist(x[:, :2], x[:, :2])
+            dist_matrix.fill_diagonal_(float("inf"))
+            src = dist_matrix.topk(k, dim=1, largest=False).indices.flatten()
+            dst = torch.arange(n, device=x.device).repeat_interleave(k)
+        else:
+            src = torch.zeros(0, dtype=torch.long, device=x.device)
+            dst = torch.zeros(0, dtype=torch.long, device=x.device)
 
         rel = x[dst, :4] - x[src, :4]
         dist = (x[dst, :2] - x[src, :2]).norm(dim=1, keepdim=True)
@@ -240,13 +256,18 @@ def create_model(env: gym.Env):
     ppo = RecurrentPPO(
         GdPolicy,
         env,
-        learning_rate=1e-5,
+        learning_rate=0.01,
         policy_kwargs={
             "features_extractor_class": GdFeatureExtractor,
             "features_extractor_kwargs": {"features_dim": FEATURES_DIM},
         },
     )
     ppo.set_logger(
-        Logger("training/results", [HumanOutputFormat("training/results/training.log")])
+        Logger(
+            "training/results",
+            [
+                JsonlOutputFormat("training/results/metrics.jsonl"),
+            ],
+        )
     )
     return ppo
