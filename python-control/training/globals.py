@@ -19,6 +19,9 @@ FACE_FEATURES = 10
 PLAYER_FEATURES = 13
 MAX_PLAYERS = 2
 
+# attempt seconds; not sent by the bridge, read from attempt_ms
+GLOBAL_FEATURES = 1
+
 # ------------------------------------------------
 
 

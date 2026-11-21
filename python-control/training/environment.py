@@ -39,6 +39,9 @@ class GdEnv(gym.Env):
                     FACE_FEATURES,
                 ),
             ),
+            "globals": gym.spaces.Box(
+                0.0, np.inf, shape=(GLOBAL_FEATURES,), dtype=np.float32
+            ),
         }
     )
     action_space = gym.spaces.MultiBinary(MAX_PLAYERS)  # key held for each player
@@ -48,14 +51,19 @@ class GdEnv(gym.Env):
         super().__init__()
         print("Waiting for bridge connection...")
         self.bridge.connect()
-        self._last_inputs = [False for _ in range(MAX_PLAYERS)]
         assert self.bridge.connected, (
             "GD bridge connection failed. Is GD open and in a level?"
         )
 
     def _get_obs(self):
         px, py = self.bridge.p1.x, self.bridge.p1.y
-        return {"players": self._player_obs(py), "faces": self._face_obs(px, py)}
+        return {
+            "players": self._player_obs(py),
+            "faces": self._face_obs(px, py),
+            "globals": np.array(
+                [self.bridge.attempt_ms / 1000], dtype=np.float32
+            ),
+        }
 
     def _player_obs(self, py: float) -> np.ndarray:
         return np.array(
@@ -118,8 +126,8 @@ class GdEnv(gym.Env):
 
     def step(self, action: list[bool]):
         reward = self.bridge.attempt_ms / 1000
-        if not self._last_inputs[0] and action[0]:
-            reward -= 0.01  # encourage less clicks
+        if action[0]:
+            reward -= 0.001  # encourage less clicks
 
         player_coordinates = [
             [
@@ -133,6 +141,7 @@ class GdEnv(gym.Env):
         ]
 
         # minimum distance between either player hitbox and the closest point on the closest face
+        # default=inf covers empty levels (no faces) and frames where both players are absent
         min_distance = min(
             (
                 min(
@@ -140,15 +149,16 @@ class GdEnv(gym.Env):
                         GdEnv.dist_betw(face, player_points)
                         for player_points in player_coordinates
                     ),
+                    default=float("inf"),
                 )
                 for face in self.bridge.faces
             ),
+            default=float("inf"),
         )
 
         # reward clearance of up to 100 pixels, scaled appropriately
         reward += min(min_distance, 100) * 2e-6
 
-        self._last_inputs = action
         self.bridge.set_inputs(*action)
         self.bridge.wait_steps(1)
 
