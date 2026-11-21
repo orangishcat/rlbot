@@ -8,11 +8,11 @@ from shapely.geometry import Point
 from bridge import (
     CMD_RESTART,
     FACE_FLAT,
-    GdBridge,
     MAX_FACES,
     FaceCategory,
     FaceKind,
     GameMode,
+    GdBridge,
 )
 
 from .globals import *
@@ -30,12 +30,10 @@ assert PLAYER_FEATURES == len(GameMode) + 3 + 2, (
 class GdEnv(gym.Env):
     observation_space = gym.spaces.Dict(
         {
-            "players": gym.spaces.Box(
-                -np.inf, np.inf, shape=(MAX_PLAYERS, PLAYER_FEATURES)
-            ),
+            "players": gym.spaces.Box(-1e5, 1e5, shape=(MAX_PLAYERS, PLAYER_FEATURES)),
             "faces": gym.spaces.Box(
-                -np.inf,
-                np.inf,
+                -1e5,
+                1e5,
                 shape=(
                     FACE_SLOTS,
                     FACE_FEATURES,
@@ -48,6 +46,7 @@ class GdEnv(gym.Env):
 
     def __init__(self) -> None:
         super().__init__()
+        print("Waiting for bridge connection...")
         self.bridge.connect()
         self._last_inputs = [False for _ in range(MAX_PLAYERS)]
         assert self.bridge.connected, (
@@ -162,9 +161,9 @@ class GdEnv(gym.Env):
         )
 
 
-def init():
+def create_env():
     gym.register(id="GeometryDash", entry_point=GdEnv, max_episode_steps=1000)  # pyright: ignore[reportArgumentType]
 
     gd_env = gym.make("GeometryDash")
-    check_env(gd_env)
+    check_env(gd_env.unwrapped)
     return gd_env

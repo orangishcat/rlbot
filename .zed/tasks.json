@@ -8,10 +8,6 @@
     },
   },
   {
-    "label": "run game",
-    "command": "open \"steam://run/322170\"",
-  },
-  {
     "label": "build and run",
     "command": "pkill 'Geometry Dash' || true && cmake --build build --target rlbot_PACKAGE && open \"steam://run/322170\"",
     "cwd": "$ZED_WORKTREE_ROOT/geode-bridge",
@@ -25,8 +21,17 @@
     "cwd": "$ZED_WORKTREE_ROOT/python-control",
   },
   {
+    "label": "run training",
+    "command": "uv run python training.py",
+    "cwd": "$ZED_WORKTREE_ROOT/python-control",
+  },
+  {
     "label": "invalidate shared memory package (macos only)",
     "command": "trash rlbot_bridge.bin",
     "cwd": "~/Library/Application Support/GeometryDash",
+  },
+  {
+    "label": "run game",
+    "command": "open \"steam://run/322170\"",
   },
 ]

@@ -18,7 +18,7 @@
 namespace bridge {
 
 constexpr uint32_t MAGIC = 0x52424447; // "GDBR" little-endian
-constexpr uint32_t VERSION = 7;
+constexpr uint32_t VERSION = 1;
 constexpr int MAX_FACES = 1000;
 
 // HitFace::kind
@@ -38,9 +38,9 @@ inline constexpr uint8_t CMD_OPEN_LEVEL = 2; // open a saved level by name
 // command status codes (C++ -> Python)
 inline constexpr uint8_t CMD_STATUS_OK = 0;
 inline constexpr uint8_t CMD_STATUS_NOT_FOUND = 1; // no level with that name
-inline constexpr uint8_t CMD_STATUS_NO_LEVEL = 2;  // not inside a playable level
-inline constexpr uint8_t CMD_STATUS_UNKNOWN = 3;   // unrecognized command id
-inline constexpr int CMD_NAME_LEN = 64;            // includes NUL terminator
+inline constexpr uint8_t CMD_STATUS_NO_LEVEL = 2; // not inside a playable level
+inline constexpr uint8_t CMD_STATUS_UNKNOWN = 3;  // unrecognized command id
+inline constexpr int CMD_NAME_LEN = 64;           // includes NUL terminator
 
 enum class GameMode : uint8_t {
   Cube,
@@ -58,10 +58,10 @@ struct PlayerState {
   uint8_t gravityFlipped; // 1 = upside down
   uint8_t present;        // 0 = nonexistent (e.g. dual off)
   uint8_t _pad;
-  float x, y;    // player center (getPosition)
-  float sizeX;   // hitbox size, from the player's oriented box
+  float x, y;  // player center (getPosition)
+  float sizeX; // hitbox size, from the player's oriented box
   float sizeY;
-  float velX;    // player velocity (getCurrentXVelocity / getYVelocity)
+  float velX; // player velocity (getCurrentXVelocity / getYVelocity)
   float velY;
 }; // 28 bytes
 
@@ -88,7 +88,7 @@ struct SharedLayout {
   uint8_t p1Held;
   uint8_t p2Held;
   // -- frame stepping control --
-  uint8_t stepMode; // Python -> C++: 1 while frame stepping is active
+  uint8_t stepMode;        // Python -> C++: 1 while frame stepping is active
   uint8_t playerDestroyed; // C++ -> Python: 1 since the last attempt reset
   uint8_t _pad[4];
   uint32_t stepReq;  // Python -> C++: total physics ticks requested

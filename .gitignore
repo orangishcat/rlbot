@@ -27,3 +27,5 @@ CMakeUserPresets.json
 # Other
 .cache/
 __pycache__/
+
+python-control/training/results

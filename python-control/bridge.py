@@ -16,7 +16,7 @@ BRIDGE_PATH = os.path.expanduser(
 )
 
 MAGIC = 0x52424447  # "GDBR"
-VERSION = 6
+VERSION = 1
 MAX_FACES = 1000
 
 
@@ -167,6 +167,7 @@ class GdBridge:
             os.close(fd)
         magic, version = HEADER.unpack_from(self._mm)[:2]
         if magic != MAGIC or version != VERSION:
+            print("Magic or version does not match")
             self._mm.close()
             self._mm = None
             return False
