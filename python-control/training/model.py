@@ -151,11 +151,15 @@ class GdPolicy(RecurrentActorCriticPolicy):
     def __init__(self, observation_space, action_space, lr_schedule, *args, **kwargs):
         super().__init__(observation_space, action_space, lr_schedule, *args, **kwargs)
         self.lstm_actor = GRUWithCellState(
-            self.features_dim, self.lstm_output_dim, num_layers=self.lstm_actor.num_layers
+            self.features_dim,
+            self.lstm_output_dim,
+            num_layers=self.lstm_actor.num_layers,
         )
         if self.lstm_critic is not None:
             self.lstm_critic = GRUWithCellState(
-                self.features_dim, self.lstm_output_dim, num_layers=self.lstm_critic.num_layers
+                self.features_dim,
+                self.lstm_output_dim,
+                num_layers=self.lstm_critic.num_layers,
             )
         self.optimizer = self.optimizer_class(
             self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs
