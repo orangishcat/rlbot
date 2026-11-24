@@ -124,6 +124,18 @@ class GlobalModel(torch.nn.Module):
         return self.global_mlp(out)
 
 
+class GRUWithCellState(nn.GRU):
+    """nn.GRU that takes and returns the (h, c) tuple sb3_contrib's recurrent PPO expects.
+
+    A GRU has no cell state, so c is passed through untouched (it stays zero).
+    """
+
+    def forward(self, input: Tensor, hx: tuple[Tensor, Tensor]):
+        h, c = hx
+        output, h_n = super().forward(input, h)
+        return output, (h_n, c)
+
+
 class GdPolicy(RecurrentActorCriticPolicy):
     """Recurrent policy for the Dict observation, with one MultiBinary fix.
 
@@ -131,7 +143,23 @@ class GdPolicy(RecurrentActorCriticPolicy):
     Bernoulli.log_prob (binary_cross_entropy_with_logits), so PPO's
     evaluate_actions raises "result type Float can't be cast ... Char".
     Cast to float, which is what the logits are.
+
+    The recurrent layers are GRUs rather than LSTMs: sb3_contrib hardcodes nn.LSTM,
+    so they are swapped in here and the optimizer is rebuilt over the new parameters.
     """
+
+    def __init__(self, observation_space, action_space, lr_schedule, *args, **kwargs):
+        super().__init__(observation_space, action_space, lr_schedule, *args, **kwargs)
+        self.lstm_actor = GRUWithCellState(
+            self.features_dim, self.lstm_output_dim, num_layers=self.lstm_actor.num_layers
+        )
+        if self.lstm_critic is not None:
+            self.lstm_critic = GRUWithCellState(
+                self.features_dim, self.lstm_output_dim, num_layers=self.lstm_critic.num_layers
+            )
+        self.optimizer = self.optimizer_class(
+            self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs
+        )
 
     def evaluate_actions(self, obs, actions, *args, **kwargs):
         if (
@@ -261,6 +289,7 @@ def create_model(env: gym.Env):
             "features_extractor_class": GdFeatureExtractor,
             "features_extractor_kwargs": {"features_dim": FEATURES_DIM},
         },
+        device="mps",
     )
     ppo.set_logger(
         Logger(
