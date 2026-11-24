@@ -11,6 +11,8 @@ from enum import IntEnum
 
 import numpy as np
 
+from profiling import profiler
+
 BRIDGE_PATH = os.path.expanduser(
     "~/Library/Application Support/GeometryDash/rlbot_bridge.bin"
 )
@@ -185,42 +187,43 @@ class GdBridge:
 
     def poll(self):
         """Read one stable state snapshot. Returns True if new data arrived."""
-        if not self._mm:
-            return False
-        magic, version, seq, _, two, face_count, attempt_ms = HEADER.unpack_from(
-            self._mm
-        )
-        if magic != MAGIC or version != VERSION:
-            self.state_fresh = False
-            return False
-        if seq == self._last_state_seq:
-            self.state_fresh = False
-            return False
-        # read snapshot; if the writer bumped the seq mid-read, retry once
-        snap = bytes(self._mm)
-        if HEADER.unpack_from(snap)[2] != seq:
-            return self.poll()
-        self._last_state_seq = seq
-        self.state_fresh = True
-        self.two_player = bool(two)
-        self.attempt_ms = attempt_ms
-        self.step_mode = bool(snap[STEP_MODE_OFFSET])
-        self.player_destroyed = bool(snap[PLAYER_DESTROYED_OFFSET])
-        self.step_req = U32.unpack_from(snap, STEP_REQ_OFFSET)[0]
-        self.step_done = U32.unpack_from(snap, STEP_DONE_OFFSET)[0]
-        self.cmd_req = U32.unpack_from(snap, CMD_REQ_OFFSET)[0]
-        self.cmd_done = U32.unpack_from(snap, CMD_DONE_OFFSET)[0]
-        self.cmd_status = snap[CMD_STATUS_OFFSET]
-
-        self._read_player(self.p1, HEADER_SIZE)
-        self._read_player(self.p2, HEADER_SIZE + PLAYER.size)
-
-        self.face_count = min(face_count, MAX_FACES)
-        if self.face_count:
-            self._faces[: self.face_count] = np.frombuffer(
-                snap, FACE_DTYPE, self.face_count, FACES_OFFSET
+        with profiler.phase("bridge/poll"):
+            if not self._mm:
+                return False
+            magic, version, seq, _, two, face_count, attempt_ms = HEADER.unpack_from(
+                self._mm
             )
-        return True
+            if magic != MAGIC or version != VERSION:
+                self.state_fresh = False
+                return False
+            if seq == self._last_state_seq:
+                self.state_fresh = False
+                return False
+            # read snapshot; if the writer bumped the seq mid-read, retry once
+            snap = bytes(self._mm)
+            if HEADER.unpack_from(snap)[2] != seq:
+                return self.poll()
+            self._last_state_seq = seq
+            self.state_fresh = True
+            self.two_player = bool(two)
+            self.attempt_ms = attempt_ms
+            self.step_mode = bool(snap[STEP_MODE_OFFSET])
+            self.player_destroyed = bool(snap[PLAYER_DESTROYED_OFFSET])
+            self.step_req = U32.unpack_from(snap, STEP_REQ_OFFSET)[0]
+            self.step_done = U32.unpack_from(snap, STEP_DONE_OFFSET)[0]
+            self.cmd_req = U32.unpack_from(snap, CMD_REQ_OFFSET)[0]
+            self.cmd_done = U32.unpack_from(snap, CMD_DONE_OFFSET)[0]
+            self.cmd_status = snap[CMD_STATUS_OFFSET]
+
+            self._read_player(self.p1, HEADER_SIZE)
+            self._read_player(self.p2, HEADER_SIZE + PLAYER.size)
+
+            self.face_count = min(face_count, MAX_FACES)
+            if self.face_count:
+                self._faces[: self.face_count] = np.frombuffer(
+                    snap, FACE_DTYPE, self.face_count, FACES_OFFSET
+                )
+            return True
 
     @property
     def faces(self) -> np.ndarray:
@@ -287,13 +290,14 @@ class GdBridge:
         Only completes while step mode is on. True if all n finished in time."""
         if not self._mm:
             return False
-        target = self.request_steps(n)
-        assert target is not None
-        start = time.perf_counter()
-        while time.perf_counter() - start < timeout:
-            self.poll()
-            if self.step_done >= target:
-                return True
+        with profiler.phase("bridge/wait_steps"):
+            target = self.request_steps(n)
+            assert target is not None
+            start = time.perf_counter()
+            while time.perf_counter() - start < timeout:
+                self.poll()
+                if self.step_done >= target:
+                    return True
         warnings.warn("Waiting for steps timed out")
         return False
 

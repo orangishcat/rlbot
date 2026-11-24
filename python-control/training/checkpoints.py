@@ -5,6 +5,8 @@ import numpy as np
 import torch
 from stable_baselines3.common.callbacks import BaseCallback
 
+from profiling import profiler
+
 CHECKPOINT_NAME = re.compile(r"steps_(\d+)_ticks_\d+\.pt")
 
 
@@ -51,10 +53,11 @@ class BestSurvivalCheckpoint(BaseCallback):
                 continue
             if self.episode_ticks[i] > self.best_ticks:
                 self.best_ticks = int(self.episode_ticks[i])
-                self.best_state = {
-                    k: v.detach().cpu().clone()
-                    for k, v in self.model.policy.state_dict().items()
-                }
+                with profiler.phase("checkpoint/copy_best"):
+                    self.best_state = {
+                        k: v.detach().cpu().clone()
+                        for k, v in self.model.policy.state_dict().items()
+                    }
             self.episode_ticks[i] = 0
 
         bucket = self.num_timesteps // self.every
@@ -66,11 +69,12 @@ class BestSurvivalCheckpoint(BaseCallback):
     def _save(self, step: int) -> None:
         if self.best_state is None:
             return
-        torch.save(
-            {
-                "num_timesteps": step,
-                "best_ticks": self.best_ticks,
-                "policy_state_dict": self.best_state,
-            },
-            self.directory / f"steps_{step:08d}_ticks_{self.best_ticks}.pt",
-        )
+        with profiler.phase("checkpoint/save"):
+            torch.save(
+                {
+                    "num_timesteps": step,
+                    "best_ticks": self.best_ticks,
+                    "policy_state_dict": self.best_state,
+                },
+                self.directory / f"steps_{step:08d}_ticks_{self.best_ticks}.pt",
+            )

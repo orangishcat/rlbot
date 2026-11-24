@@ -8,6 +8,8 @@ from torch import Tensor, nn
 from torch_geometric.nn.models.meta import MetaLayer
 from torch_geometric.utils import scatter
 
+from profiling import profiler
+
 from .globals import FACE_FEATURES, GLOBAL_FEATURES, MAX_PLAYERS, PLAYER_FEATURES
 from .json_log import JsonlOutputFormat
 
@@ -165,13 +167,18 @@ class GdPolicy(RecurrentActorCriticPolicy):
             self.parameters(), lr=lr_schedule(1), **self.optimizer_kwargs
         )
 
+    def forward(self, *args, **kwargs):
+        with profiler.phase("rollout/policy_forward"):
+            return super().forward(*args, **kwargs)
+
     def evaluate_actions(self, obs, actions, *args, **kwargs):
         if (
             isinstance(self.action_space, gym.spaces.MultiBinary)
             and not actions.is_floating_point()
         ):
             actions = actions.float()
-        return super().evaluate_actions(obs, actions, *args, **kwargs)
+        with profiler.phase("train/evaluate_actions"):
+            return super().evaluate_actions(obs, actions, *args, **kwargs)
 
 
 class GdFeatureExtractor(BaseFeaturesExtractor):
@@ -284,8 +291,32 @@ class GdFeatureExtractor(BaseFeaturesExtractor):
         return self.out(torch.cat([u, per_player.flatten(1)], dim=1))
 
 
+class GdRecurrentPPO(RecurrentPPO):
+    """RecurrentPPO that times each phase of the training loop with `profiler`.
+
+    `train/total` is flushed one dump late: SB3 dumps logs before `train()` runs,
+    the same lag as the `train/*` metrics.
+    """
+
+    def learn(self, *args, **kwargs):
+        profiler.reset()  # drop env checks and setup done before learning
+        return super().learn(*args, **kwargs)
+
+    def collect_rollouts(self, *args, **kwargs):
+        with profiler.phase("rollout/total"):
+            return super().collect_rollouts(*args, **kwargs)
+
+    def train(self) -> None:
+        with profiler.phase("train/total"):
+            super().train()
+
+    def dump_logs(self, iteration: int = 0) -> None:
+        profiler.flush(self.logger)
+        super().dump_logs(iteration)
+
+
 def create_model(env: gym.Env):
-    ppo = RecurrentPPO(
+    ppo = GdRecurrentPPO(
         GdPolicy,
         env,
         learning_rate=0.01,

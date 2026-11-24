@@ -14,6 +14,7 @@ from bridge import (
     GameMode,
     GdBridge,
 )
+from profiling import profiler
 
 from .globals import *
 
@@ -110,10 +111,10 @@ class GdEnv(gym.Env):
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         # IMPORTANT: Must call this first to seed the random number generator
         super().reset(seed=seed)
-        self.bridge.set_step_mode(True)
-        self.bridge.wait_cmd(CMD_RESTART)
-
-        return self._get_obs(), self._get_info()
+        with profiler.phase("env/reset"):
+            self.bridge.set_step_mode(True)
+            self.bridge.wait_cmd(CMD_RESTART)
+            return self._get_obs(), self._get_info()
 
     @staticmethod
     def dist_betw(face: np.void, player_points: list[float]):
@@ -130,42 +131,47 @@ class GdEnv(gym.Env):
         )
 
     def step(self, action: list[bool]):
-        reward = TICK_SECONDS
-        player_coordinates = [
-            [
-                p.x - p.size_x / 2,
-                p.y - p.size_y / 2,
-                p.x + p.size_x / 2,
-                p.y + p.size_y / 2,
+        with profiler.phase("env/reward"):
+            reward = TICK_SECONDS
+            player_coordinates = [
+                [
+                    p.x - p.size_x / 2,
+                    p.y - p.size_y / 2,
+                    p.x + p.size_x / 2,
+                    p.y + p.size_y / 2,
+                ]
+                for p in [self.bridge.p1, self.bridge.p2]
+                if p.present
             ]
-            for p in [self.bridge.p1, self.bridge.p2]
-            if p.present
-        ]
 
-        # minimum distance between either player hitbox and the closest point on the closest face
-        # default=inf covers empty levels (no faces) and frames where both players are absent
-        min_distance = min(
-            (
-                min(
-                    (
-                        GdEnv.dist_betw(face, player_points)
-                        for player_points in player_coordinates
-                    ),
-                    default=float("inf"),
-                )
-                for face in self.bridge.faces
-            ),
-            default=float("inf"),
-        )
+            # minimum distance between either player hitbox and the closest point on the closest face
+            # default=inf covers empty levels (no faces) and frames where both players are absent
+            min_distance = min(
+                (
+                    min(
+                        (
+                            GdEnv.dist_betw(face, player_points)
+                            for player_points in player_coordinates
+                        ),
+                        default=float("inf"),
+                    )
+                    for face in self.bridge.faces
+                ),
+                default=float("inf"),
+            )
 
-        # reward clearance of up to 100 pixels, scaled appropriately
-        reward += min(min_distance, 100) * 2e-6
+            # reward clearance of up to 100 pixels, scaled appropriately
+            reward += min(min_distance, 100) * 2e-6
 
-        self.bridge.set_inputs(*action)
-        self.bridge.wait_steps(1)
+        with profiler.phase("env/bridge_step"):
+            self.bridge.set_inputs(*action)
+            self.bridge.wait_steps(1)
+
+        with profiler.phase("env/observe"):
+            obs = self._get_obs()
 
         return (
-            self._get_obs(),
+            obs,
             reward,
             self.bridge.player_destroyed,
             False,

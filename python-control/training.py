@@ -12,7 +12,7 @@ def main():
     resumed = load_latest_checkpoint(gd_model, CHECKPOINT_DIR)
     print("Beginning training")
     gd_model.learn(
-        total_timesteps=100_000,
+        total_timesteps=3e6,
         progress_bar=True,
         reset_num_timesteps=not resumed,
         callback=BestSurvivalCheckpoint(CHECKPOINT_DIR, every=4096),
