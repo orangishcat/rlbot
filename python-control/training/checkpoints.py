@@ -1,8 +1,32 @@
+import re
 from pathlib import Path
 
 import numpy as np
 import torch
 from stable_baselines3.common.callbacks import BaseCallback
+
+CHECKPOINT_NAME = re.compile(r"steps_(\d+)_ticks_\d+\.pt")
+
+
+def load_latest_checkpoint(model, directory: str) -> bool:
+    """Restore policy weights and step count from the newest checkpoint in `directory`.
+
+    Returns False, leaving `model` untouched, if there is no checkpoint.
+    """
+    found = []
+    for path in Path(directory).glob("steps_*.pt"):
+        match = CHECKPOINT_NAME.fullmatch(path.name)
+        if match:
+            found.append((int(match[1]), path))
+    if not found:
+        return False
+
+    _, latest = max(found)
+    checkpoint = torch.load(latest, map_location="cpu")
+    model.policy.load_state_dict(checkpoint["policy_state_dict"])
+    model.num_timesteps = checkpoint["num_timesteps"]
+    print(f"Resumed from {latest} at {model.num_timesteps} steps")
+    return True
 
 
 class BestSurvivalCheckpoint(BaseCallback):
