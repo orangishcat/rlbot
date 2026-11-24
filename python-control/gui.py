@@ -174,8 +174,9 @@ class ControlGUI:
                 return "nonexistent"
             mode = p.gamemode.name.lower()
             g = "up" if p.gravity_flipped else "down"
+            ground = "yes" if p.is_touching_ground else "no"
             return (
-                f"{mode:6s} x={p.x:8.1f} y={p.y:8.1f} grav={g} "
+                f"{mode:6s} x={p.x:8.1f} y={p.y:8.1f} grav={g} ground={ground} "
                 f"size={p.size_x:.1f}x{p.size_y:.1f} "
                 f"vel={p.vel_x:7.1f},{p.vel_y:7.1f}"
             )

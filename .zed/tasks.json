@@ -26,6 +26,11 @@
     "cwd": "$ZED_WORKTREE_ROOT/python-control",
   },
   {
+    "label": "plot training",
+    "command": "uv run python plot_training.py",
+    "cwd": "$ZED_WORKTREE_ROOT/python-control",
+  },
+  {
     "label": "invalidate shared memory package (macos only)",
     "command": "trash rlbot_bridge.bin",
     "cwd": "~/Library/Application Support/GeometryDash",

@@ -28,11 +28,11 @@ K_NEIGHBORS = 8
 # after the one-hot blocks, and `present` is always the last column
 FACE_COORDS = FACE_FEATURES - 5  # x1, y1, x2, y2, present
 FACE_PRESENT = FACE_FEATURES - 1
-PLAYER_Y = PLAYER_FEATURES - 5  # y, vel_x, vel_y, gravity_flipped, present
+PLAYER_Y = PLAYER_FEATURES - 6  # y, vel_x, vel_y, gravity_flipped, is_touching_ground, present
 PLAYER_PRESENT = PLAYER_FEATURES - 1
 
 assert FACE_COORDS + 4 == FACE_PRESENT, "face coord/present layout changed"
-assert PLAYER_Y + 4 == PLAYER_PRESENT, "player y/present layout changed"
+assert PLAYER_Y + 5 == PLAYER_PRESENT, "player y/present layout changed"
 
 
 # Implementation of GNN from https://arxiv.org/abs/1806.01261

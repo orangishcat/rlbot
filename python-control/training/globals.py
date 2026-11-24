@@ -15,8 +15,9 @@ FACE_FEATURES = 10
 # one hot for gamemode CUBE, SHIP, BALL, UFO, WAVE, ROBOT, SPIDER, SWING (8 features)
 # floats for y, x velocity, y velocity (3 features) (no x because player x is treated as zero)
 # boolean for gravity_flipped (1 feature)
+# boolean for is_touching_ground: present and bottom edge at y <= 0 (1 feature)
 # boolean for present (for player 2; not present unless in dual)  (1 feature)
-PLAYER_FEATURES = 13
+PLAYER_FEATURES = 14
 MAX_PLAYERS = 2
 
 # attempt seconds; not sent by the bridge, read from attempt_ms

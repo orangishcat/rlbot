@@ -121,6 +121,10 @@ class PlayerState:
         self.size_x = self.size_y = 0.0
         self.vel_x = self.vel_y = 0.0
 
+    @property
+    def is_touching_ground(self) -> bool:
+        return self.present and self.y - self.size_y / 2 <= 91
+
 
 class GdBridge:
     """Reads game state written by the Geode mod, writes inputs for it."""

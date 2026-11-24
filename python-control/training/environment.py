@@ -24,8 +24,8 @@ assert FACE_SLOTS == MAX_FACES, "training FACE_SLOTS must match bridge MAX_FACES
 assert FACE_FEATURES == len(FaceKind) + len(FaceCategory) + 5, (
     "kind one-hot + category one-hot + x1, y1, x2, y2 + present"
 )
-assert PLAYER_FEATURES == len(GameMode) + 3 + 2, (
-    "gamemode one-hot + y, vel_x, vel_y + gravity_flipped, present"
+assert PLAYER_FEATURES == len(GameMode) + 3 + 3, (
+    "gamemode one-hot + y, vel_x, vel_y + gravity_flipped, is_touching_ground, present"
 )
 
 
@@ -43,7 +43,7 @@ class GdEnv(gym.Env):
                 ),
             ),
             "globals": gym.spaces.Box(
-                0.0, np.inf, shape=(GLOBAL_FEATURES,), dtype=np.float32
+                0.0, 1e5, shape=(GLOBAL_FEATURES,), dtype=np.float32
             ),
         }
     )
@@ -73,7 +73,11 @@ class GdEnv(gym.Env):
                     (
                         onehot(p.gamemode),
                         [p.y - py, p.vel_x, p.vel_y],
-                        [p.gravity_flipped, p.present],
+                        [
+                            p.gravity_flipped,
+                            p.is_touching_ground,
+                            p.present,
+                        ],
                     )
                 )
                 for p in (self.bridge.p1, self.bridge.p2)
