@@ -17,7 +17,7 @@ BRIDGE_PATH = os.path.expanduser(
 
 MAGIC = 0x52424447  # "GDBR"
 VERSION = 1
-MAX_FACES = 128
+MAX_FACES = 256
 
 
 class FaceKind(IntEnum):

@@ -4,7 +4,7 @@ import numpy as np
 
 # ---------- KEEP IN SYNC WITH BRIDGE ------------
 
-FACE_SLOTS = 128
+FACE_SLOTS = 256
 
 # one hot for FACE_FLAT, FACE_CIRCLE, CAT_SOLID, CAT_HAZARD, CAT_HAZARD types (5 features)
 # floats x1, y1, x2, y2   (x2 = radius and y2 = 0 for circular faces) (4 features)
