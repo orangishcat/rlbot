@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -142,17 +143,259 @@ static uint8_t categoryForType(GameObjectType t) {
   case GameObjectType::UserCoin:
     return bridge::CAT_INTERACT;
 
+  // collideable, harmless
+  case GameObjectType::Solid:
+  case GameObjectType::Breakable:
+  case GameObjectType::Slope:
+  case GameObjectType::CollisionObject:
+  case GameObjectType::Special:
+    return bridge::CAT_SOLID;
+
   // purely visual / non-physical
   case GameObjectType::Decoration:
   case GameObjectType::Modifier:
   case GameObjectType::EnterEffectObject:
     return 255;
 
-  // Solid, Slope, Breakable, CollisionObject, Special and anything else
+  // Unknown types are not assumed solid: a decoration misclassified as a
+  // hitbox floods the face list and feeds the model phantom geometry.
   default:
-    return bridge::CAT_SOLID;
+    return 255;
   }
 }
+
+// ---------- geometry index ----------
+//
+// Scanning every object in the level on every tick dominates the per-tick
+// cost on long levels. Cache the gameplay objects once per level, sorted by
+// their x extent, and per tick visit only the slice that can be observed.
+// Objects can move, so the slice is padded by kMoveSlack and the live rects
+// of the visited objects are still read every tick.
+
+namespace {
+
+constexpr float kTickDt = 1.f / 30.f;
+// observation window: an object farther than this from the player is not sent
+constexpr float kKeepAhead = 800.f;
+constexpr float kKeepVertical = 500.f;
+// how far the window scan reaches beyond the observation window, so objects
+// that moved since the index was built are still considered
+constexpr float kMoveSlack = 400.f;
+// keep the app alive / let queued main-thread work run
+constexpr std::chrono::milliseconds kPumpIdleBudget(250);
+constexpr std::chrono::milliseconds kPumpMaxBudget(1000);
+constexpr std::chrono::microseconds kIdleSleep(50);
+constexpr float kFar = 1e18f;
+
+struct IndexEntry {
+  GameObject *go;
+  float minX; // bounds when the index was built; only used for window lookup
+  uint8_t category;
+};
+
+struct FaceCandidate {
+  bridge::HitFace faces[4]; // rect = 4 edges, slope = 3, circle = 1
+  uint8_t count;
+  float distance;
+};
+
+struct Box {
+  float minX, minY, maxX, maxY;
+};
+
+std::vector<IndexEntry> g_index;
+const PlayLayer *g_indexOwner = nullptr;
+unsigned g_indexObjectCount = 0;
+
+std::vector<FaceCandidate> g_candidates; // reused between ticks
+
+Box playerBox(const bridge::PlayerState &p) {
+  Box b;
+  b.minX = p.x - p.sizeX * 0.5f;
+  b.maxX = p.x + p.sizeX * 0.5f;
+  b.minY = p.y - p.sizeY * 0.5f;
+  b.maxY = p.y + p.sizeY * 0.5f;
+  return b;
+}
+
+float pointBoxDistance(float px, float py, const Box &b) {
+  float dx = std::max(0.f, std::max(b.minX - px, px - b.maxX));
+  float dy = std::max(0.f, std::max(b.minY - py, py - b.maxY));
+  return std::sqrt(dx * dx + dy * dy);
+}
+
+float pointSegmentDistance(float px, float py, float ax, float ay, float bx,
+                           float by) {
+  float abx = bx - ax;
+  float aby = by - ay;
+  float denom = abx * abx + aby * aby;
+  float t = 0.f;
+  if (denom > 0.f)
+    t = std::clamp(((px - ax) * abx + (py - ay) * aby) / denom, 0.f, 1.f);
+  float dx = px - (ax + t * abx);
+  float dy = py - (ay + t * aby);
+  return std::sqrt(dx * dx + dy * dy);
+}
+
+// Liang-Barsky: does the segment touch the box?
+bool segmentHitsBox(float ax, float ay, float bx, float by, const Box &b) {
+  float dx = bx - ax;
+  float dy = by - ay;
+  float t0 = 0.f;
+  float t1 = 1.f;
+  auto clip = [&](float p, float q) {
+    if (p == 0.f)
+      return q >= 0.f;
+    float r = q / p;
+    if (p < 0.f) {
+      if (r > t1)
+        return false;
+      if (r > t0)
+        t0 = r;
+    } else {
+      if (r < t0)
+        return false;
+      if (r < t1)
+        t1 = r;
+    }
+    return true;
+  };
+  return clip(-dx, ax - b.minX) && clip(dx, b.maxX - ax) &&
+         clip(-dy, ay - b.minY) && clip(dy, b.maxY - ay);
+}
+
+// Exact distance between a segment and an axis-aligned box: for disjoint
+// convex sets the minimum is attained at a vertex of one of them.
+float segmentBoxDistance(float ax, float ay, float bx, float by, const Box &b) {
+  if (segmentHitsBox(ax, ay, bx, by, b))
+    return 0.f;
+  float d = std::min(pointBoxDistance(ax, ay, b), pointBoxDistance(bx, by, b));
+  const float cx[4] = {b.minX, b.maxX, b.maxX, b.minX};
+  const float cy[4] = {b.minY, b.minY, b.maxY, b.maxY};
+  for (int i = 0; i < 4; ++i)
+    d = std::min(d, pointSegmentDistance(cx[i], cy[i], ax, ay, bx, by));
+  return d;
+}
+
+float faceBoxDistance(const bridge::HitFace &f, const Box &b) {
+  if (f.kind == bridge::FACE_CIRCLE)
+    return std::max(0.f, pointBoxDistance(f.x1, f.y1, b) - f.x2);
+  return segmentBoxDistance(f.x1, f.y1, f.x2, f.y2, b);
+}
+
+// Fill `out` with the hitbox faces of `go`; false if it has no hitbox.
+bool buildObjectFaces(GameObject *go, uint8_t category, float radius,
+                      float minX, float minY, float maxX, float maxY,
+                      FaceCandidate &out) {
+  out.count = 0;
+  // circular hitboxes are the in-game hitbox for round objects (orbs, saws,
+  // ...); everything else uses the hitbox rect
+  if (radius > 0.f) {
+    auto c = go->getPosition();
+    out.faces[0] = {bridge::FACE_CIRCLE, category, 0, c.x, c.y, radius, 0.f};
+    out.count = 1;
+    return true;
+  }
+
+  cocos2d::CCPoint vertices[4];
+  int vertexCount = 0;
+  if (go->getType() == GameObjectType::Slope) {
+    // Slopes are triangular hitboxes. GD stores their orientation in
+    // m_slopeDirection / m_slopeUphill and computes the diagonal with
+    // slopeYPos(); OBB2D only describes the enclosing rectangle.
+    bool floorTop = go->slopeFloorTop();
+    bool wallLeft = go->slopeWallLeft();
+    float floorY = floorTop ? maxY : minY;
+    float wallX = wallLeft ? minX : maxX;
+    float tipY = static_cast<float>(go->slopeYPos(wallX));
+    if (tipY < minY || tipY > maxY || tipY == floorY)
+      tipY = floorTop ? minY : maxY;
+    vertices[0] = cocos2d::CCPoint(minX, floorY);
+    vertices[1] = cocos2d::CCPoint(maxX, floorY);
+    vertices[2] = cocos2d::CCPoint(wallX, tipY);
+    vertexCount = 3;
+  } else {
+    // Preserve GD's oriented rectangular hitbox for other objects.
+    go->updateOrientedBox();
+    auto *obb = go->getOrientedBox();
+    if (obb) {
+      for (auto &point : obb->m_corners)
+        vertices[vertexCount++] = cocos2d::CCPoint(point.x, point.y);
+    } else {
+      vertices[0] = cocos2d::CCPoint(minX, minY);
+      vertices[1] = cocos2d::CCPoint(maxX, minY);
+      vertices[2] = cocos2d::CCPoint(maxX, maxY);
+      vertices[3] = cocos2d::CCPoint(minX, maxY);
+      vertexCount = 4;
+    }
+  }
+  // The shared face list is edge-based, so any polygon can be sent as
+  // consecutive vertex pairs without changing the Python protocol.
+  for (int i = 0; i < vertexCount; ++i) {
+    auto &a = vertices[i];
+    auto &b = vertices[(i + 1) % vertexCount];
+    out.faces[out.count++] = {
+        bridge::FACE_FLAT, category, 0, a.x, a.y, b.x, b.y};
+  }
+  return true;
+}
+
+void buildObjectIndex(PlayLayer *pl) {
+  auto start = std::chrono::steady_clock::now();
+  g_index.clear();
+  g_indexOwner = pl;
+  g_indexObjectCount = pl->m_objects ? pl->m_objects->count() : 0;
+  if (pl->m_objects) {
+    g_index.reserve(g_indexObjectCount);
+    for (auto *go : CCArrayExt<GameObject *>(pl->m_objects)) {
+      if (!go)
+        continue;
+      uint8_t category = categoryForType(go->getType());
+      if (category == 255)
+        continue;
+      float radius = go->getObjectRadius();
+      float minX;
+      if (radius > 0.f) {
+        minX = go->getPositionX() - radius;
+      } else {
+        auto rect = go->getObjectRect();
+        if (rect.size.width <= 0.f && rect.size.height <= 0.f)
+          continue;
+        minX = rect.getMinX();
+      }
+      g_index.push_back({go, minX, category});
+    }
+  }
+  std::sort(
+      g_index.begin(), g_index.end(),
+      [](const IndexEntry &a, const IndexEntry &b) { return a.minX < b.minX; });
+  if (auto *d = g_shm.data()) {
+    d->objectCount = static_cast<uint32_t>(g_index.size());
+    d->indexBuildNs = static_cast<uint32_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start)
+            .count());
+    d->indexSeq++;
+  }
+}
+
+bool indexValid(const PlayLayer *pl) {
+  return g_indexOwner == pl && pl->m_objects &&
+         static_cast<unsigned>(pl->m_objects->count()) == g_indexObjectCount;
+}
+
+void recordTick(std::chrono::nanoseconds physics,
+                std::chrono::nanoseconds write) {
+  auto *d = g_shm.data();
+  if (!d)
+    return;
+  uint32_t slot = d->tickSeq % bridge::TICK_SAMPLES;
+  d->physicsNs[slot] = static_cast<uint32_t>(physics.count());
+  d->writeNs[slot] = static_cast<uint32_t>(write.count());
+  d->tickSeq++;
+}
+
+} // namespace
 
 static void writeState(PlayLayer *pl) {
   auto *d = g_shm.data();
@@ -167,40 +410,39 @@ static void writeState(PlayLayer *pl) {
   // set by destroyPlayer, cleared by the game's object reset
   d->playerDestroyed = pl->m_player1->m_isDead ? 1 : 0;
 
+  if (!indexValid(pl))
+    buildObjectIndex(pl);
+
   // nearest faces: real hitbox faces (flat segments or circles) of nearby
   // interactible/collideable objects
   auto p1 = pl->m_player1->getPosition();
   auto p2pos = pl->m_player2->getPosition();
+  Box box1 = playerBox(d->p1);
+  Box box2 = dual ? playerBox(d->p2) : Box{};
 
-  struct Tmp {
-    std::vector<bridge::HitFace> faces;
-    float dist;
-  };
-  static std::vector<Tmp> tmp;
-  tmp.clear();
+  g_candidates.clear();
 
-  for (auto *go : CCArrayExt<GameObject *>(pl->m_objects)) {
+  // window of the x-sorted index; nearest-first selection happens below
+  float scanLo = p1.x - kMoveSlack;
+  float scanHi = p1.x + kKeepAhead + kMoveSlack;
+  auto it =
+      std::lower_bound(g_index.begin(), g_index.end(), scanLo,
+                       [](const IndexEntry &e, float v) { return e.minX < v; });
+  for (; it != g_index.end() && it->minX <= scanHi; ++it) {
+    GameObject *go = it->go;
     if (go->m_isDisabled || go->m_isGroupDisabled || go->m_isGroupDisabledTemp)
       continue;
 
-    uint8_t cat = categoryForType(go->getType());
-    if (cat == 255)
-      continue;
-
-    // circular hitboxes are the in-game hitbox for round objects
-    // (orbs, saws, ...); everything else uses the hitbox rect
     float radius = go->getObjectRadius();
-    float minX, minY, maxX, maxY, cx = 0.f, cy = 0.f;
+    float minX, minY, maxX, maxY;
     if (radius > 0.f) {
       auto c = go->getPosition();
-      cx = c.x;
-      cy = c.y;
-      minX = cx - radius;
-      maxX = cx + radius;
-      minY = cy - radius;
-      maxY = cy + radius;
+      minX = c.x - radius;
+      maxX = c.x + radius;
+      minY = c.y - radius;
+      maxY = c.y + radius;
     } else {
-      auto rect = go->getObjectRect(); // gameplay hitbox rect, world space
+      auto rect = go->getObjectRect(); // live rect: objects can move
       if (rect.size.width <= 0.f && rect.size.height <= 0.f)
         continue;
       minX = rect.getMinX();
@@ -211,64 +453,48 @@ static void writeState(PlayLayer *pl) {
 
     float distX = 1e18f;
     float distY = 1e18f;
-    for (auto pp : {p1, p2pos}) {
+    float nearestSq = kFar;
+    for (const auto &pp : {p1, p2pos}) {
       float dx = std::max(0.f, std::max(minX - pp.x, pp.x - maxX));
       float dy = std::max(0.f, std::max(minY - pp.y, pp.y - maxY));
       distX = std::min(distX, std::abs(dx));
       distY = std::min(distY, std::abs(dy));
+      nearestSq = std::min(nearestSq, dx * dx + dy * dy);
     }
-    if (distX > 800.f || distY > 500 || maxX < p1.x)
+    // only player 1 defines what is "behind"; p2 is a second reference point
+    if (distX > kKeepAhead || distY > kKeepVertical || maxX < p1.x)
       continue;
 
-    std::vector<bridge::HitFace> objectFaces;
-    if (radius > 0.f) {
-      objectFaces.push_back({bridge::FACE_CIRCLE, cat, 0, cx, cy, radius, 0.f});
-    } else {
-      std::vector<cocos2d::CCPoint> vertices;
-      if (go->getType() == GameObjectType::Slope) {
-        // Slopes are triangular hitboxes. GD stores their orientation in
-        // m_slopeDirection / m_slopeUphill and computes the diagonal with
-        // slopeYPos(); OBB2D only describes the enclosing rectangle.
-        bool floorTop = go->slopeFloorTop();
-        bool wallLeft = go->slopeWallLeft();
-        float floorY = floorTop ? maxY : minY;
-        float wallX = wallLeft ? minX : maxX;
-        float tipY = static_cast<float>(go->slopeYPos(wallX));
-        if (tipY < minY || tipY > maxY || tipY == floorY)
-          tipY = floorTop ? minY : maxY;
-        vertices = {{minX, floorY}, {maxX, floorY}, {wallX, tipY}};
-      } else {
-        // Preserve GD's oriented rectangular hitbox for other objects.
-        go->updateOrientedBox();
-        auto *obb = go->getOrientedBox();
-        if (obb) {
-          for (auto &point : obb->m_corners)
-            vertices.push_back(point);
-        } else {
-          vertices = {{minX, minY}, {maxX, minY}, {maxX, maxY}, {minX, maxY}};
-        }
-      }
-      // The shared face list is edge-based, so any polygon can be sent as
-      // consecutive vertex pairs without changing the Python protocol.
-      for (size_t i = 0; i < vertices.size(); ++i) {
-        auto &a = vertices[i];
-        auto &b = vertices[(i + 1) % vertices.size()];
-        objectFaces.push_back({bridge::FACE_FLAT, cat, 0, a.x, a.y, b.x, b.y});
-      }
-    }
-    if (!objectFaces.empty())
-      tmp.push_back({std::move(objectFaces), distX});
+    FaceCandidate candidate{};
+    if (!buildObjectFaces(go, it->category, radius, minX, minY, maxX, maxY,
+                          candidate))
+      continue;
+    candidate.distance = std::sqrt(nearestSq);
+    g_candidates.push_back(candidate);
   }
 
-  std::sort(tmp.begin(), tmp.end(),
-            [](const Tmp &a, const Tmp &b) { return a.dist < b.dist; });
+  d->faceCandidates = static_cast<uint32_t>(g_candidates.size());
+
+  std::sort(g_candidates.begin(), g_candidates.end(),
+            [](const FaceCandidate &a, const FaceCandidate &b) {
+              return a.distance < b.distance;
+            });
   size_t count = 0;
-  for (const auto &object : tmp) {
-    if (count + object.faces.size() > bridge::MAX_FACES)
+  float nearestDist = -1.f;
+  for (const auto &candidate : g_candidates) {
+    if (count + candidate.count > bridge::MAX_FACES)
       continue;
-    for (const auto &face : object.faces)
+    for (uint8_t i = 0; i < candidate.count; ++i) {
+      const auto &face = candidate.faces[i];
       d->faces[count++] = face;
+      float dist = faceBoxDistance(face, box1);
+      if (dual)
+        dist = std::min(dist, faceBoxDistance(face, box2));
+      if (nearestDist < 0.f || dist < nearestDist)
+        nearestDist = dist;
+    }
   }
+  d->nearestDist = nearestDist;
 
   // release-style barrier so Python never sees a torn write
   std::atomic_thread_fence(std::memory_order_release);
@@ -342,6 +568,7 @@ static void executeOpenLevel(const std::string &name, uint32_t req) {
   auto *scene = CCScene::create();
   scene->addChild(pl);
   CCDirector::sharedDirector()->replaceScene(scene);
+  g_indexOwner = nullptr; // objects of the old level are gone
   // fresh attempt state: re-queue held inputs and reset the input clock
   g_lastP1 = g_lastP2 = 255;
   g_levelStartSet = false;
@@ -349,12 +576,15 @@ static void executeOpenLevel(const std::string &name, uint32_t req) {
   d->cmdDone = req;
 }
 
+enum class CommandResult { None, Handled, Deferred };
+
 // Drain the command channel. Needs pl for restarts; CMD_OPEN_LEVEL works
-// without one (e.g. from the editor). Returns true if a command was claimed.
-static bool handleCommands(PlayLayer *pl) {
+// without one (e.g. from the editor). Deferred means the command is queued on
+// the main thread and only lands after the current frame returns.
+static CommandResult handleCommands(PlayLayer *pl) {
   auto *d = g_shm.data();
   if (!d || d->cmdDone == d->cmdReq || d->cmdReq == g_lastCmdReq)
-    return false;
+    return CommandResult::None;
   g_lastCmdReq = d->cmdReq;
 
   uint8_t cmd = d->cmd;
@@ -371,22 +601,30 @@ static bool handleCommands(PlayLayer *pl) {
       d->cmdStatus = bridge::CMD_STATUS_NO_LEVEL;
     }
     d->cmdDone = req;
-    return true;
+    return CommandResult::Handled;
   }
 
   if (cmd == bridge::CMD_OPEN_LEVEL) {
     // scene changes must not happen mid-update
     Loader::get()->queueInMainThread(
         [name, req] { executeOpenLevel(name, req); });
-    return true;
+    return CommandResult::Deferred;
   }
 
   d->cmdStatus = bridge::CMD_STATUS_UNKNOWN;
   d->cmdDone = req;
-  return true;
+  return CommandResult::Handled;
 }
 
 class $modify(BridgePlayLayer, PlayLayer) {
+  // losing focus pauses the level; a paused level never ticks, so stepping
+  // would hang until the window is refocused. Manual pauses still apply.
+  void pauseGame(bool unfocused) {
+    if (unfocused && g_shm.ready() && g_shm.data()->stepMode)
+      return;
+    PlayLayer::pauseGame(unfocused);
+  }
+
   void postUpdate(float dt) {
     if (g_shm.ready() && g_shm.data()->stepMode)
       return; // frame stepping owns physics (see BridgePhysics::update)
@@ -413,10 +651,47 @@ class $modify(BridgePlayLayer, PlayLayer) {
   }
 };
 
-// Frame-stepping gate. While stepMode is set, the game's own clock is blocked
-// and every tick Python requested via stepReq is simulated with a fixed dt of
-// 1/240 (TPS-240 equivalent), with state written back after each tick so
-// Python can read the new hitboxes before requesting the next one.
+// Run requested ticks inside a single director frame. The game's own clock is
+// blocked while stepMode is set: every tick Python requests through stepReq is
+// simulated with a fixed dt and written back before stepDone advances, so
+// Python can read the new hitboxes before requesting the next one. Staying
+// inside update() between requests removes the render-frame rate limit; the
+// budget only bounds how long the app goes without drawing or pumping events.
+static void pumpSteps(PlayLayer *pl) {
+  auto *d = g_shm.data();
+  auto idleDeadline = std::chrono::steady_clock::now() + kPumpIdleBudget;
+  auto hardDeadline = std::chrono::steady_clock::now() + kPumpMaxBudget;
+
+  while (true) {
+    // scene changes are queued on the main thread and need the frame to end
+    if (handleCommands(pl) == CommandResult::Deferred)
+      break;
+    if (!d->stepMode)
+      break;
+
+    if (d->stepDone != d->stepReq) {
+      applyInputs(pl);
+      auto t0 = std::chrono::steady_clock::now();
+      pl->GJBaseGameLayer::update(kTickDt); // one physics tick
+      auto t1 = std::chrono::steady_clock::now();
+      writeState(pl);
+      auto t2 = std::chrono::steady_clock::now();
+      recordTick(t1 - t0, t2 - t1);
+      d->stepDone++;
+      d->ticksThisSession++;
+      idleDeadline = std::chrono::steady_clock::now() + kPumpIdleBudget;
+      continue;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    if (now >= idleDeadline || now >= hardDeadline)
+      break;
+    // yield the core while Python computes; the sleep bounds the latency
+    std::this_thread::sleep_for(kIdleSleep);
+  }
+  d->pumpReturns++;
+}
+
 class $modify(BridgePhysics, GJBaseGameLayer) {
   void update(float dt) {
     auto *pl = typeinfo_cast<PlayLayer *>(this);
@@ -439,7 +714,12 @@ class $modify(BridgePhysics, GJBaseGameLayer) {
         pl->resetLevel();
         d->stepReq = 0;
         d->stepDone = 0;
+        d->tickSeq = 0;
+        d->ticksThisSession = 0;
+        d->pumpReturns = 0;
+        d->nearestDist = -1.f;
         g_lastP1 = g_lastP2 = 255;
+        g_indexOwner = nullptr; // object pointers change with the restart
         writeState(pl);
       }
       g_lastStepMode = d->stepMode;
@@ -450,14 +730,6 @@ class $modify(BridgePhysics, GJBaseGameLayer) {
       return;
     }
 
-    // drain requested ticks; capped per render frame so a runaway request
-    // count can't freeze the game (the rest drains over the next frames)
-    uint32_t guard = 0;
-    while (d->stepDone != d->stepReq && guard++ < 4096) {
-      applyInputs(pl);
-      GJBaseGameLayer::update(1.f / 30.f); // one physics tick
-      d->stepDone++;
-      writeState(pl);
-    }
+    pumpSteps(pl);
   }
 };

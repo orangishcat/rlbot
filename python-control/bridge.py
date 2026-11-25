@@ -18,8 +18,9 @@ BRIDGE_PATH = os.path.expanduser(
 )
 
 MAGIC = 0x52424447  # "GDBR"
-VERSION = 1
+VERSION = 2
 MAX_FACES = 256
+TICK_SAMPLES = 64  # rolling per-tick timing samples kept by the mod
 
 
 class FaceKind(IntEnum):
@@ -99,7 +100,21 @@ CMD_DONE_OFFSET = CMD_REQ_OFFSET + 4
 CMD_OFFSET = CMD_DONE_OFFSET + 4
 CMD_STATUS_OFFSET = CMD_OFFSET + 1
 CMD_NAME_OFFSET = CMD_STATUS_OFFSET + 3
-TOTAL_SIZE = CMD_NAME_OFFSET + CMD_NAME_LEN
+
+# -- mod diagnostics (after cmd_name) --
+FLOAT = struct.Struct("<f")
+DIAG_OFFSET = CMD_NAME_OFFSET + CMD_NAME_LEN
+OBJECT_COUNT_OFFSET = DIAG_OFFSET
+FACE_CANDIDATES_OFFSET = DIAG_OFFSET + 4
+INDEX_SEQ_OFFSET = DIAG_OFFSET + 8
+TICK_SEQ_OFFSET = DIAG_OFFSET + 12
+PHYSICS_NS_OFFSET = DIAG_OFFSET + 16
+WRITE_NS_OFFSET = PHYSICS_NS_OFFSET + 4 * TICK_SAMPLES
+PUMP_RETURNS_OFFSET = WRITE_NS_OFFSET + 4 * TICK_SAMPLES
+TICKS_SESSION_OFFSET = PUMP_RETURNS_OFFSET + 4
+NEAREST_DIST_OFFSET = TICKS_SESSION_OFFSET + 4
+INDEX_BUILD_NS_OFFSET = NEAREST_DIST_OFFSET + 4
+TOTAL_SIZE = INDEX_BUILD_NS_OFFSET + 4
 
 
 class PlayerState:
@@ -148,6 +163,15 @@ class GdBridge:
         self.cmd_req = 0
         self.cmd_done = 0
         self.cmd_status = CMD_OK
+        # mod diagnostics (see Shared.hpp); refreshed by poll()
+        self.object_count = 0
+        self.face_candidates = 0
+        self.index_seq = 0
+        self.index_build_ms = 0.0
+        self.tick_seq = 0
+        self.ticks_this_session = 0
+        self.pump_returns = 0
+        self.nearest_dist = -1.0
 
     # -- connection -----------------------------------------------------
 
@@ -214,6 +238,16 @@ class GdBridge:
             self.cmd_req = U32.unpack_from(snap, CMD_REQ_OFFSET)[0]
             self.cmd_done = U32.unpack_from(snap, CMD_DONE_OFFSET)[0]
             self.cmd_status = snap[CMD_STATUS_OFFSET]
+            self.object_count = U32.unpack_from(snap, OBJECT_COUNT_OFFSET)[0]
+            self.face_candidates = U32.unpack_from(snap, FACE_CANDIDATES_OFFSET)[0]
+            self.index_seq = U32.unpack_from(snap, INDEX_SEQ_OFFSET)[0]
+            self.tick_seq = U32.unpack_from(snap, TICK_SEQ_OFFSET)[0]
+            self.ticks_this_session = U32.unpack_from(snap, TICKS_SESSION_OFFSET)[0]
+            self.pump_returns = U32.unpack_from(snap, PUMP_RETURNS_OFFSET)[0]
+            self.nearest_dist = FLOAT.unpack_from(snap, NEAREST_DIST_OFFSET)[0]
+            self.index_build_ms = (
+                U32.unpack_from(snap, INDEX_BUILD_NS_OFFSET)[0] / 1e6
+            )
 
             self._read_player(self.p1, HEADER_SIZE)
             self._read_player(self.p2, HEADER_SIZE + PLAYER.size)
@@ -232,6 +266,22 @@ class GdBridge:
         A view into a reused buffer: read it before the next poll, do not retain it.
         """
         return self._faces[: self.face_count]
+
+    def tick_timings_ms(self) -> tuple[np.ndarray, np.ndarray]:
+        """Per-tick (physics, writeState) durations for the last TICK_SAMPLES
+        ticks, oldest first. Empty until the mod has simulated a tick."""
+        if not self._mm or not self.tick_seq:
+            empty = np.zeros(0, dtype=np.float32)
+            return empty, empty
+        n = min(self.tick_seq, TICK_SAMPLES)
+        slots = (np.arange(self.tick_seq - n, self.tick_seq)) % TICK_SAMPLES
+        physics = np.frombuffer(
+            self._mm, dtype="<u4", count=TICK_SAMPLES, offset=PHYSICS_NS_OFFSET
+        )[slots].astype(np.float32)
+        write = np.frombuffer(
+            self._mm, dtype="<u4", count=TICK_SAMPLES, offset=WRITE_NS_OFFSET
+        )[slots].astype(np.float32)
+        return physics / 1e6, write / 1e6
 
     def _read_player(self, player: PlayerState, offset: int):
         assert self._mm is not None
@@ -293,12 +343,15 @@ class GdBridge:
         with profiler.phase("bridge/wait_steps"):
             target = self.request_steps(n)
             assert target is not None
-            start = time.perf_counter()
-            while time.perf_counter() - start < timeout:
+            deadline = time.perf_counter() + timeout
+            while True:
                 self.poll()
                 if self.step_done >= target:
                     return True
-                time.sleep(2e-3)
+                if time.perf_counter() >= deadline:
+                    break
+                # the mod answers in ~50us; sleeping 2ms here cost 6ms/tick
+                time.sleep(0)
         warnings.warn("Waiting for steps timed out")
         return False
 
@@ -331,7 +384,7 @@ class GdBridge:
                 if log:
                     print(f"Command {cmd} took {elapsed * 1e3:.2f}ms")
                 return self.cmd_status == CMD_OK
-            time.sleep(2e-3)
+            time.sleep(0)
         warnings.warn("Waiting for command execution timed out")
         return False
 
