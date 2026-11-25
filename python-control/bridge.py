@@ -298,6 +298,7 @@ class GdBridge:
                 self.poll()
                 if self.step_done >= target:
                     return True
+                time.sleep(2e-3)
         warnings.warn("Waiting for steps timed out")
         return False
 
@@ -330,6 +331,7 @@ class GdBridge:
                 if log:
                     print(f"Command {cmd} took {elapsed * 1e3:.2f}ms")
                 return self.cmd_status == CMD_OK
+            time.sleep(2e-3)
         warnings.warn("Waiting for command execution timed out")
         return False
 

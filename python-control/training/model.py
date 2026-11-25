@@ -30,7 +30,9 @@ K_NEIGHBORS = 8
 # after the one-hot blocks, and `present` is always the last column
 FACE_COORDS = FACE_FEATURES - 5  # x1, y1, x2, y2, present
 FACE_PRESENT = FACE_FEATURES - 1
-PLAYER_Y = PLAYER_FEATURES - 6  # y, vel_x, vel_y, gravity_flipped, is_touching_ground, present
+PLAYER_Y = (
+    PLAYER_FEATURES - 6
+)  # y, vel_x, vel_y, gravity_flipped, is_touching_ground, present
 PLAYER_PRESENT = PLAYER_FEATURES - 1
 
 assert FACE_COORDS + 4 == FACE_PRESENT, "face coord/present layout changed"
@@ -201,56 +203,74 @@ class GdFeatureExtractor(BaseFeaturesExtractor):
         )
 
     @staticmethod
-    def _graph(faces: Tensor, players: Tensor):
-        """One sample -> (x, edge_index, edge_attr, player_rows).
+    def _nodes(faces: Tensor, players: Tensor) -> tuple[Tensor, Tensor]:
+        """Padded node features (B, MAX_PLAYERS + FACE_SLOTS, 5) and their present mask.
 
-        Only present entities become nodes. Players come first so their rows are
-        stable; `player_rows` maps each player slot to a node row, -1 if absent.
+        Players come first in each sample so their slots are stable.
         """
-        present_players = players[:, PLAYER_PRESENT] > 0.5
-        present_faces = faces[:, FACE_PRESENT] > 0.5
-
-        p_y = players[present_players, PLAYER_Y]
+        p_y = players[:, :, PLAYER_Y]
         zeros = torch.zeros_like(p_y)
         # x is treated as zero, so a player is a point at (0, y)
-        p_nodes = torch.stack([zeros, p_y, zeros, p_y, torch.ones_like(p_y)], dim=1)
+        p_nodes = torch.stack([zeros, p_y, zeros, p_y, torch.ones_like(p_y)], dim=2)
 
-        f_coords = faces[present_faces, FACE_COORDS : FACE_COORDS + 4]
-        f_nodes = torch.cat(
-            [
-                f_coords,
-                torch.zeros(
-                    (f_coords.shape[0], 1), dtype=f_coords.dtype, device=f_coords.device
-                ),
-            ],
+        f_coords = faces[:, :, FACE_COORDS : FACE_COORDS + 4]
+        f_nodes = torch.cat([f_coords, torch.zeros_like(f_coords[:, :, :1])], dim=2)
+
+        nodes = torch.cat([p_nodes, f_nodes], dim=1)
+        present = torch.cat(
+            [players[:, :, PLAYER_PRESENT] > 0.5, faces[:, :, FACE_PRESENT] > 0.5],
             dim=1,
         )
+        return nodes, present
 
-        x = torch.cat([p_nodes, f_nodes], dim=0)
-        n = x.shape[0]
-        n_players = p_nodes.shape[0]
+    @staticmethod
+    def _graph(faces: Tensor, players: Tensor):
+        """Batch -> (x, edge_index, edge_attr, batch, player_rows) over present nodes only.
 
-        slots = torch.nonzero(present_players, as_tuple=False).flatten()
-        player_rows = torch.full((MAX_PLAYERS,), -1, dtype=torch.long, device=x.device)
-        player_rows[slots] = torch.arange(n_players, device=x.device)
+        Nodes are compacted across the batch. Each node receives from its K_NEIGHBORS
+        nearest other present nodes in the same sample. `player_rows` maps each player
+        slot to a node row, -1 if absent.
+        """
+        nodes, present = GdFeatureExtractor._nodes(faces, players)
+        B, N = present.shape
+        device = nodes.device
 
-        # each node receives from its K_NEIGHBORS nearest other nodes (by position)
-        k = min(K_NEIGHBORS, n - 1)
-        if k > 0:
-            dist_matrix = torch.cdist(x[:, :2], x[:, :2])
-            dist_matrix.fill_diagonal_(float("inf"))
-            src = dist_matrix.topk(k, dim=1, largest=False).indices.flatten()
-            dst = torch.arange(n, device=x.device).repeat_interleave(k)
-        else:
-            src = torch.zeros(0, dtype=torch.long, device=x.device)
-            dst = torch.zeros(0, dtype=torch.long, device=x.device)
+        flat_present = present.reshape(-1)
+        # padded flat index -> compact node row
+        compact = torch.cumsum(flat_present, 0) - 1
+        x = nodes.reshape(-1, NODE_FEATURES)[flat_present]
+        batch = torch.arange(B, device=device).repeat_interleave(N)[flat_present]
+        is_player = (torch.arange(N, device=device) < MAX_PLAYERS).repeat(B)[
+            flat_present
+        ]
+
+        xy = nodes[:, :, :2]
+        dist = torch.cdist(xy, xy)
+        dist = dist.masked_fill(~present.unsqueeze(1), float("inf"))
+        dist = dist.masked_fill(
+            torch.eye(N, dtype=torch.bool, device=device).unsqueeze(0), float("inf")
+        )
+        k = min(K_NEIGHBORS, N - 1)
+        vals, src = dist.topk(k, dim=2, largest=False)  # (B, N, k)
+        dst = torch.arange(N, device=device).view(1, N, 1).expand(B, N, k)
+        offset = (torch.arange(B, device=device) * N).view(B, 1, 1)
+        keep = (present.unsqueeze(2) & torch.isfinite(vals)).reshape(-1)
+        src = compact[(src + offset).reshape(-1)[keep]]
+        dst = compact[(dst + offset).reshape(-1)[keep]]
+        edge_index = torch.stack([src, dst])
 
         rel = x[dst, :4] - x[src, :4]
-        dist = (x[dst, :2] - x[src, :2]).norm(dim=1, keepdim=True)
-        edge_type = (src < n_players).to(x.dtype) + (dst < n_players).to(x.dtype)
-        edge_attr = torch.cat([rel, dist, edge_type.unsqueeze(1)], dim=1)
+        edge_dist = (x[dst, :2] - x[src, :2]).norm(dim=1, keepdim=True)
+        edge_type = is_player[src].to(x.dtype) + is_player[dst].to(x.dtype)
+        edge_attr = torch.cat([rel, edge_dist, edge_type.unsqueeze(1)], dim=1)
 
-        return x, torch.stack([src, dst]), edge_attr, player_rows
+        slots = torch.arange(MAX_PLAYERS, device=device)
+        player_rows = torch.where(
+            present[:, :MAX_PLAYERS],
+            compact[(torch.arange(B, device=device) * N).unsqueeze(1) + slots],
+            -1,
+        )
+        return x, edge_index, edge_attr, batch, player_rows
 
     def forward(self, obs: dict[str, Tensor]) -> Tensor:
         faces: Tensor = obs["faces"]  # (B, FACE_SLOTS, FACE_FEATURES)
@@ -258,26 +278,7 @@ class GdFeatureExtractor(BaseFeaturesExtractor):
         u: Tensor = obs["globals"]  # (B, GLOBAL_FEATURES)
         batch_size = faces.shape[0]
 
-        xs, edge_indices, edge_attrs, batches = [], [], [], []
-        player_rows = torch.full(
-            (batch_size, MAX_PLAYERS), -1, dtype=torch.long, device=faces.device
-        )
-        offset = 0
-        for b in range(batch_size):
-            x, edge_index, edge_attr, rows = self._graph(faces[b], players[b])
-            xs.append(x)
-            edge_indices.append(edge_index + offset)
-            edge_attrs.append(edge_attr)
-            batches.append(
-                torch.full((x.shape[0],), b, dtype=torch.long, device=x.device)
-            )
-            player_rows[b] = torch.where(rows >= 0, rows + offset, -1)
-            offset += x.shape[0]
-
-        x = torch.cat(xs, 0)
-        edge_index = torch.cat(edge_indices, 1)
-        edge_attr = torch.cat(edge_attrs, 0)
-        batch = torch.cat(batches, 0)
+        x, edge_index, edge_attr, batch, player_rows = self._graph(faces, players)
 
         for _ in range(GNN_ROUNDS):
             x, edge_attr, u = self.gnn(x, edge_index, edge_attr, u, batch)
@@ -320,6 +321,7 @@ def create_model(env: gym.Env):
         GdPolicy,
         env,
         learning_rate=0.01,
+        ent_coef=0.05,
         policy_kwargs={
             "features_extractor_class": GdFeatureExtractor,
             "features_extractor_kwargs": {"features_dim": FEATURES_DIM},
