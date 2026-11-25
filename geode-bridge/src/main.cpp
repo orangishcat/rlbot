@@ -333,7 +333,7 @@ static void executeOpenLevel(const std::string &name, uint32_t req) {
     d->cmdDone = req;
     return;
   }
-  auto *pl = PlayLayer::create(lvl, false, false);
+  auto *pl = PlayLayer::create(lvl, false);
   if (!pl) {
     d->cmdStatus = bridge::CMD_STATUS_NO_LEVEL;
     d->cmdDone = req;
