@@ -2,17 +2,17 @@ from typing import Any
 
 import gymnasium as gym
 from gymnasium.utils.env_checker import check_env
-from shapely import LineString, box
+from shapely import box
 from shapely.geometry import Point
 
 from bridge import (
     CMD_RESTART,
-    FACE_FLAT,
-    MAX_FACES,
-    FaceCategory,
-    FaceKind,
+    MAX_OBSTACLES,
+    OBSTACLE_RECT,
     GameMode,
     GdBridge,
+    ObstacleCategory,
+    ObstacleKind,
 )
 from profiling import profiler
 
@@ -21,9 +21,11 @@ from .globals import *
 # seconds of game time per tick; matches the step size in geode-bridge/src/main.cpp
 TICK_SECONDS = 1 / 30
 
-assert FACE_SLOTS == MAX_FACES, "training FACE_SLOTS must match bridge MAX_FACES"
-assert FACE_FEATURES == len(FaceKind) + len(FaceCategory) + 5, (
-    "kind one-hot + category one-hot + x1, y1, x2, y2 + present"
+assert OBSTACLE_SLOTS == MAX_OBSTACLES, (
+    "training OBSTACLE_SLOTS must match bridge MAX_OBSTACLES"
+)
+assert OBSTACLE_FEATURES == len(ObstacleKind) + len(ObstacleCategory) + 5, (
+    "kind one-hot + category one-hot + x, y, w, h + present"
 )
 assert PLAYER_FEATURES == len(GameMode) + 3 + 3, (
     "gamemode one-hot + y, vel_x, vel_y + gravity_flipped, is_touching_ground, present"
@@ -35,12 +37,12 @@ class GdEnv(gym.Env):
     observation_space = gym.spaces.Dict(
         {
             "players": gym.spaces.Box(-1e5, 1e5, shape=(MAX_PLAYERS, PLAYER_FEATURES)),
-            "faces": gym.spaces.Box(
+            "obstacles": gym.spaces.Box(
                 -1e5,
                 1e5,
                 shape=(
-                    FACE_SLOTS,
-                    FACE_FEATURES,
+                    OBSTACLE_SLOTS,
+                    OBSTACLE_FEATURES,
                 ),
             ),
             "globals": gym.spaces.Box(
@@ -63,7 +65,7 @@ class GdEnv(gym.Env):
         px, py = self.bridge.p1.x, self.bridge.p1.y
         return {
             "players": self._player_obs(py),
-            "faces": self._face_obs(px, py),
+            "obstacles": self._obstacle_obs(px, py),
             "globals": np.array([self.bridge.attempt_ms / 1000], dtype=np.float32),
         }
 
@@ -86,23 +88,23 @@ class GdEnv(gym.Env):
             dtype=np.float32,
         )
 
-    def _face_obs(self, px: float, py: float) -> np.ndarray:
+    def _obstacle_obs(self, px: float, py: float) -> np.ndarray:
         # fixed shape: unused rows are all zero, i.e. present = 0
-        out = np.zeros((FACE_SLOTS, FACE_FEATURES), dtype=np.float32)
-        faces = self.bridge.faces
-        n = len(faces)
+        out = np.zeros((OBSTACLE_SLOTS, OBSTACLE_FEATURES), dtype=np.float32)
+        obstacles = self.bridge.obstacles
+        n = len(obstacles)
         if not n:
             return out
         rows = np.arange(n)
-        kind_end = len(FaceKind)
-        coords = kind_end + len(FaceCategory)
-        out[rows, faces["kind"]] = 1
-        out[rows, kind_end + faces["category"]] = 1
-        out[:n, coords] = faces["x1"] - px
-        out[:n, coords + 1] = faces["y1"] - py
-        out[:n, coords + 2] = faces["x2"] - px
-        out[:n, coords + 3] = faces["y2"] - py
-        out[:n, FACE_FEATURES - 1] = 1  # present
+        kind_end = len(ObstacleKind)
+        coords = kind_end + len(ObstacleCategory)
+        out[rows, obstacles["kind"]] = 1
+        out[rows, kind_end + obstacles["category"]] = 1
+        out[:n, coords] = obstacles["x"] - px
+        out[:n, coords + 1] = obstacles["y"] - py
+        out[:n, coords + 2] = obstacles["w"]
+        out[:n, coords + 3] = obstacles["h"]
+        out[:n, OBSTACLE_FEATURES - 1] = 1  # present
         return out
 
     def _get_info(self):
@@ -117,18 +119,13 @@ class GdEnv(gym.Env):
             return self._get_obs(), self._get_info()
 
     @staticmethod
-    def dist_betw(face: np.void, player_points: list[float]):
+    def dist_betw(obstacle: np.void, player_points: list[float]):
         player_box = box(*player_points)  # pyright: ignore
-        if face["kind"] == FACE_FLAT:
-            return LineString(
-                [
-                    (float(face["x1"]), float(face["y1"])),
-                    (float(face["x2"]), float(face["y2"])),
-                ]
-            ).distance(player_box)
-        return player_box.distance(
-            Point(float(face["x1"]), float(face["y1"])).buffer(float(face["x2"]))
-        )
+        x, y, w, h = (float(obstacle[k]) for k in ("x", "y", "w", "h"))
+        if obstacle["kind"] == OBSTACLE_RECT:
+            rect = box(x - w / 2, y - h / 2, x + w / 2, y + h / 2)  # pyright: ignore
+            return rect.distance(player_box)
+        return player_box.distance(Point(x, y).buffer(w))
 
     def step(self, action: list[bool]):
         with profiler.phase("env/reward"):
@@ -144,18 +141,18 @@ class GdEnv(gym.Env):
                 if p.present
             ]
 
-            # minimum distance between either player hitbox and the closest point on the closest face
-            # default=inf covers empty levels (no faces) and frames where both players are absent
+            # minimum distance between either player hitbox and the closest obstacle
+            # default=inf covers empty levels (no obstacles) and frames where both players are absent
             min_distance = min(
                 (
                     min(
                         (
-                            GdEnv.dist_betw(face, player_points)
+                            GdEnv.dist_betw(obstacle, player_points)
                             for player_points in player_coordinates
                         ),
                         default=float("inf"),
                     )
-                    for face in self.bridge.faces
+                    for obstacle in self.bridge.obstacles
                 ),
                 default=float("inf"),
             )

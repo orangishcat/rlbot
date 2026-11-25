@@ -3,7 +3,7 @@
 // Shared memory layout for the Geode <-> Python bridge.
 // MIRRORED IN python-control/bridge.py -- keep in sync.
 //
-// C++ writes game state (players + faces), Python writes inputs.
+// C++ writes game state (players + obstacles), Python writes inputs.
 // Each side bumps its own sequence counter after every write so the
 // reader can detect complete (non-torn) writes.
 
@@ -18,16 +18,16 @@
 namespace bridge {
 
 constexpr uint32_t MAGIC = 0x52424447; // "GDBR" little-endian
-constexpr uint32_t VERSION = 2;
-constexpr int MAX_FACES = 256;
+constexpr uint32_t VERSION = 3;
+constexpr int MAX_OBSTACLES = 32; // nearest obstacles sent per tick
 // rolling per-tick timing samples (nanoseconds) written by the frame stepper
 constexpr int TICK_SAMPLES = 64;
 
-// HitFace::kind
-inline constexpr uint8_t FACE_FLAT = 0;   // line segment (x1,y1)-(x2,y2)
-inline constexpr uint8_t FACE_CIRCLE = 1; // circle at (x1,y1) with radius x2
+// Obstacle::kind (rotation is ignored: rects are axis-aligned)
+inline constexpr uint8_t OBSTACLE_RECT = 0;   // rect centred on (x, y), size (w, h)
+inline constexpr uint8_t OBSTACLE_CIRCLE = 1; // circle centred on (x, y), radius w
 
-// HitFace::category
+// Obstacle::category
 inline constexpr uint8_t CAT_SOLID =
     0; // collideable, harmless (blocks, slopes)
 inline constexpr uint8_t CAT_HAZARD = 1; // kills the player (spikes, saws)
@@ -67,12 +67,12 @@ struct PlayerState {
   float velY;
 }; // 28 bytes
 
-struct HitFace {
-  uint8_t kind;     // FACE_FLAT or FACE_CIRCLE
+struct Obstacle {
+  uint8_t kind;     // OBSTACLE_RECT or OBSTACLE_CIRCLE
   uint8_t category; // CAT_SOLID, CAT_HAZARD or CAT_INTERACT
   uint16_t _pad;
-  float x1, y1; // flat: start point / circle: center
-  float x2, y2; // flat: end point / circle: radius (y2 unused = 0)
+  float x, y; // center
+  float w, h; // rect: width, height / circle: w = radius, h unused (0)
 }; // 20 bytes
 
 struct SharedLayout {
@@ -81,12 +81,12 @@ struct SharedLayout {
   uint64_t stateSeq;  // C++ -> Python, bumped after each state write
   uint64_t inputSeq;  // Python -> C++, bumped after each input write
   uint32_t twoPlayer; // level is 2 player
-  uint32_t faceCount;
+  uint32_t obstacleCount;
   uint32_t attemptMs; // time since current attempt started
   PlayerState p1;
   PlayerState p2;
-  HitFace faces[MAX_FACES]; // nearest hitbox faces of interactible/collideable
-                            // objects
+  Obstacle obstacles[MAX_OBSTACLES]; // nearest hitboxes of interactible/collideable
+                                     // objects, nearest first
   uint8_t p1Held;
   uint8_t p2Held;
   // -- frame stepping control --
@@ -104,22 +104,22 @@ struct SharedLayout {
   char cmdName[CMD_NAME_LEN]; // NUL-terminated level name for CMD_OPEN_LEVEL
   // -- diagnostics (C++ -> Python) --
   uint32_t objectCount;     // level objects cached in the geometry index
-  uint32_t faceCandidates;  // objects considered in the last window scan
+  uint32_t obstacleCandidates; // objects considered in the last window scan
   uint32_t indexSeq;        // bumped whenever the geometry index is rebuilt
   uint32_t tickSeq;         // ring cursor; total ticks sampled by the stepper
   uint32_t physicsNs[TICK_SAMPLES]; // GJBaseGameLayer::update duration
   uint32_t writeNs[TICK_SAMPLES];   // writeState duration
   uint32_t pumpReturns;     // times the stepper handed the frame back
   uint32_t ticksThisSession; // ticks simulated since step mode was enabled
-  float nearestDist;        // player hitbox -> nearest emitted face, -1 = none
+  float nearestDist;        // player hitbox -> nearest emitted obstacle, -1 = none
   uint32_t indexBuildNs;    // duration of the last geometry index rebuild
 };
 
-inline constexpr size_t OFFSET_FACES = offsetof(SharedLayout, faces);
+inline constexpr size_t OFFSET_OBSTACLES = offsetof(SharedLayout, obstacles);
 inline constexpr size_t OFFSET_INPUTS = offsetof(SharedLayout, p1Held);
 inline constexpr size_t TOTAL_SIZE = sizeof(SharedLayout);
 static_assert(sizeof(PlayerState) == 28);
-static_assert(sizeof(HitFace) == 20);
+static_assert(sizeof(Obstacle) == 20);
 // keep in sync with python-control/bridge.py offsets
 static_assert(offsetof(SharedLayout, stepMode) == OFFSET_INPUTS + 2);
 static_assert(offsetof(SharedLayout, playerDestroyed) == OFFSET_INPUTS + 3);
@@ -133,7 +133,7 @@ static_assert(offsetof(SharedLayout, cmdName) == OFFSET_INPUTS + 28);
 // diagnostics block, mirrored in python-control/bridge.py
 inline constexpr size_t OFFSET_DIAG = OFFSET_INPUTS + 28 + CMD_NAME_LEN;
 static_assert(offsetof(SharedLayout, objectCount) == OFFSET_DIAG);
-static_assert(offsetof(SharedLayout, faceCandidates) == OFFSET_DIAG + 4);
+static_assert(offsetof(SharedLayout, obstacleCandidates) == OFFSET_DIAG + 4);
 static_assert(offsetof(SharedLayout, indexSeq) == OFFSET_DIAG + 8);
 static_assert(offsetof(SharedLayout, tickSeq) == OFFSET_DIAG + 12);
 static_assert(offsetof(SharedLayout, physicsNs) == OFFSET_DIAG + 16);

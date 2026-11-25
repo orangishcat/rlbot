@@ -4,13 +4,12 @@ import numpy as np
 
 # ---------- KEEP IN SYNC WITH BRIDGE ------------
 
-FACE_SLOTS = 256
+OBSTACLE_SLOTS = 32
 
-# one hot for FACE_FLAT, FACE_CIRCLE, CAT_SOLID, CAT_HAZARD, CAT_HAZARD types (5 features)
-# floats x1, y1, x2, y2   (x2 = radius and y2 = 0 for circular faces) (4 features)
-# y2 = 0 is probably fine, but could consider another architecture to get rid of unused parameter
-# boolean present (1 feature); since the model must receive inputs with fixed shape, some faces will be blank
-FACE_FEATURES = 10
+# one hot for OBSTACLE_RECT, OBSTACLE_CIRCLE, CAT_SOLID, CAT_HAZARD, CAT_INTERACT types (5 features)
+# floats x, y (relative to player), w, h   (w = radius and h = 0 for circles) (4 features)
+# boolean present (1 feature); since the model must receive inputs with fixed shape, some slots will be blank
+OBSTACLE_FEATURES = 10
 
 # one hot for gamemode CUBE, SHIP, BALL, UFO, WAVE, ROBOT, SPIDER, SWING (8 features)
 # floats for y, x velocity, y velocity (3 features) (no x because player x is treated as zero)

@@ -158,7 +158,7 @@ static uint8_t categoryForType(GameObjectType t) {
     return 255;
 
   // Unknown types are not assumed solid: a decoration misclassified as a
-  // hitbox floods the face list and feeds the model phantom geometry.
+  // hitbox floods the obstacle list and feeds the model phantom geometry.
   default:
     return 255;
   }
@@ -193,9 +193,8 @@ struct IndexEntry {
   uint8_t category;
 };
 
-struct FaceCandidate {
-  bridge::HitFace faces[4]; // rect = 4 edges, slope = 3, circle = 1
-  uint8_t count;
+struct Candidate {
+  bridge::Obstacle obstacle;
   float distance;
 };
 
@@ -207,7 +206,7 @@ std::vector<IndexEntry> g_index;
 const PlayLayer *g_indexOwner = nullptr;
 unsigned g_indexObjectCount = 0;
 
-std::vector<FaceCandidate> g_candidates; // reused between ticks
+std::vector<Candidate> g_candidates; // reused between ticks
 
 Box playerBox(const bridge::PlayerState &p) {
   Box b;
@@ -224,120 +223,19 @@ float pointBoxDistance(float px, float py, const Box &b) {
   return std::sqrt(dx * dx + dy * dy);
 }
 
-float pointSegmentDistance(float px, float py, float ax, float ay, float bx,
-                           float by) {
-  float abx = bx - ax;
-  float aby = by - ay;
-  float denom = abx * abx + aby * aby;
-  float t = 0.f;
-  if (denom > 0.f)
-    t = std::clamp(((px - ax) * abx + (py - ay) * aby) / denom, 0.f, 1.f);
-  float dx = px - (ax + t * abx);
-  float dy = py - (ay + t * aby);
+// Exact distance between two axis-aligned boxes (0 when they overlap).
+float boxBoxDistance(const Box &a, const Box &b) {
+  float dx = std::max(0.f, std::max(a.minX - b.maxX, b.minX - a.maxX));
+  float dy = std::max(0.f, std::max(a.minY - b.maxY, b.minY - a.maxY));
   return std::sqrt(dx * dx + dy * dy);
 }
 
-// Liang-Barsky: does the segment touch the box?
-bool segmentHitsBox(float ax, float ay, float bx, float by, const Box &b) {
-  float dx = bx - ax;
-  float dy = by - ay;
-  float t0 = 0.f;
-  float t1 = 1.f;
-  auto clip = [&](float p, float q) {
-    if (p == 0.f)
-      return q >= 0.f;
-    float r = q / p;
-    if (p < 0.f) {
-      if (r > t1)
-        return false;
-      if (r > t0)
-        t0 = r;
-    } else {
-      if (r < t0)
-        return false;
-      if (r < t1)
-        t1 = r;
-    }
-    return true;
-  };
-  return clip(-dx, ax - b.minX) && clip(dx, b.maxX - ax) &&
-         clip(-dy, ay - b.minY) && clip(dy, b.maxY - ay);
-}
-
-// Exact distance between a segment and an axis-aligned box: for disjoint
-// convex sets the minimum is attained at a vertex of one of them.
-float segmentBoxDistance(float ax, float ay, float bx, float by, const Box &b) {
-  if (segmentHitsBox(ax, ay, bx, by, b))
-    return 0.f;
-  float d = std::min(pointBoxDistance(ax, ay, b), pointBoxDistance(bx, by, b));
-  const float cx[4] = {b.minX, b.maxX, b.maxX, b.minX};
-  const float cy[4] = {b.minY, b.minY, b.maxY, b.maxY};
-  for (int i = 0; i < 4; ++i)
-    d = std::min(d, pointSegmentDistance(cx[i], cy[i], ax, ay, bx, by));
-  return d;
-}
-
-float faceBoxDistance(const bridge::HitFace &f, const Box &b) {
-  if (f.kind == bridge::FACE_CIRCLE)
-    return std::max(0.f, pointBoxDistance(f.x1, f.y1, b) - f.x2);
-  return segmentBoxDistance(f.x1, f.y1, f.x2, f.y2, b);
-}
-
-// Fill `out` with the hitbox faces of `go`; false if it has no hitbox.
-bool buildObjectFaces(GameObject *go, uint8_t category, float radius,
-                      float minX, float minY, float maxX, float maxY,
-                      FaceCandidate &out) {
-  out.count = 0;
-  // circular hitboxes are the in-game hitbox for round objects (orbs, saws,
-  // ...); everything else uses the hitbox rect
-  if (radius > 0.f) {
-    auto c = go->getPosition();
-    out.faces[0] = {bridge::FACE_CIRCLE, category, 0, c.x, c.y, radius, 0.f};
-    out.count = 1;
-    return true;
-  }
-
-  cocos2d::CCPoint vertices[4];
-  int vertexCount = 0;
-  if (go->getType() == GameObjectType::Slope) {
-    // Slopes are triangular hitboxes. GD stores their orientation in
-    // m_slopeDirection / m_slopeUphill and computes the diagonal with
-    // slopeYPos(); OBB2D only describes the enclosing rectangle.
-    bool floorTop = go->slopeFloorTop();
-    bool wallLeft = go->slopeWallLeft();
-    float floorY = floorTop ? maxY : minY;
-    float wallX = wallLeft ? minX : maxX;
-    float tipY = static_cast<float>(go->slopeYPos(wallX));
-    if (tipY < minY || tipY > maxY || tipY == floorY)
-      tipY = floorTop ? minY : maxY;
-    vertices[0] = cocos2d::CCPoint(minX, floorY);
-    vertices[1] = cocos2d::CCPoint(maxX, floorY);
-    vertices[2] = cocos2d::CCPoint(wallX, tipY);
-    vertexCount = 3;
-  } else {
-    // Preserve GD's oriented rectangular hitbox for other objects.
-    go->updateOrientedBox();
-    auto *obb = go->getOrientedBox();
-    if (obb) {
-      for (auto &point : obb->m_corners)
-        vertices[vertexCount++] = cocos2d::CCPoint(point.x, point.y);
-    } else {
-      vertices[0] = cocos2d::CCPoint(minX, minY);
-      vertices[1] = cocos2d::CCPoint(maxX, minY);
-      vertices[2] = cocos2d::CCPoint(maxX, maxY);
-      vertices[3] = cocos2d::CCPoint(minX, maxY);
-      vertexCount = 4;
-    }
-  }
-  // The shared face list is edge-based, so any polygon can be sent as
-  // consecutive vertex pairs without changing the Python protocol.
-  for (int i = 0; i < vertexCount; ++i) {
-    auto &a = vertices[i];
-    auto &b = vertices[(i + 1) % vertexCount];
-    out.faces[out.count++] = {
-        bridge::FACE_FLAT, category, 0, a.x, a.y, b.x, b.y};
-  }
-  return true;
+float obstacleBoxDistance(const bridge::Obstacle &o, const Box &b) {
+  if (o.kind == bridge::OBSTACLE_CIRCLE)
+    return std::max(0.f, pointBoxDistance(o.x, o.y, b) - o.w);
+  return boxBoxDistance(
+      Box{o.x - o.w * 0.5f, o.y - o.h * 0.5f, o.x + o.w * 0.5f, o.y + o.h * 0.5f},
+      b);
 }
 
 void buildObjectIndex(PlayLayer *pl) {
@@ -413,7 +311,7 @@ static void writeState(PlayLayer *pl) {
   if (!indexValid(pl))
     buildObjectIndex(pl);
 
-  // nearest faces: real hitbox faces (flat segments or circles) of nearby
+  // nearest obstacles: hitboxes (rects or circles) of nearby
   // interactible/collideable objects
   auto p1 = pl->m_player1->getPosition();
   auto p2pos = pl->m_player2->getPosition();
@@ -433,14 +331,19 @@ static void writeState(PlayLayer *pl) {
     if (go->m_isDisabled || go->m_isGroupDisabled || go->m_isGroupDisabledTemp)
       continue;
 
-    float radius = go->getObjectRadius();
+    bridge::Obstacle obstacle{};
     float minX, minY, maxX, maxY;
+    // circular hitboxes are the in-game hitbox for round objects (orbs, saws,
+    // ...); everything else uses the axis-aligned hitbox rect
+    float radius = go->getObjectRadius();
     if (radius > 0.f) {
       auto c = go->getPosition();
       minX = c.x - radius;
       maxX = c.x + radius;
       minY = c.y - radius;
       maxY = c.y + radius;
+      obstacle = {bridge::OBSTACLE_CIRCLE, it->category, 0,
+                  c.x,                     c.y,          radius, 0.f};
     } else {
       auto rect = go->getObjectRect(); // live rect: objects can move
       if (rect.size.width <= 0.f && rect.size.height <= 0.f)
@@ -449,6 +352,8 @@ static void writeState(PlayLayer *pl) {
       maxX = rect.getMaxX();
       minY = rect.getMinY();
       maxY = rect.getMaxY();
+      obstacle = {bridge::OBSTACLE_RECT, it->category, 0, rect.getMidX(),
+                  rect.getMidY(), rect.size.width, rect.size.height};
     }
 
     float distX = 1e18f;
@@ -465,40 +370,33 @@ static void writeState(PlayLayer *pl) {
     if (distX > kKeepAhead || distY > kKeepVertical || maxX < p1.x)
       continue;
 
-    FaceCandidate candidate{};
-    if (!buildObjectFaces(go, it->category, radius, minX, minY, maxX, maxY,
-                          candidate))
-      continue;
-    candidate.distance = std::sqrt(nearestSq);
-    g_candidates.push_back(candidate);
+    g_candidates.push_back({obstacle, std::sqrt(nearestSq)});
   }
 
-  d->faceCandidates = static_cast<uint32_t>(g_candidates.size());
+  d->obstacleCandidates = static_cast<uint32_t>(g_candidates.size());
 
   std::sort(g_candidates.begin(), g_candidates.end(),
-            [](const FaceCandidate &a, const FaceCandidate &b) {
+            [](const Candidate &a, const Candidate &b) {
               return a.distance < b.distance;
             });
   size_t count = 0;
   float nearestDist = -1.f;
   for (const auto &candidate : g_candidates) {
-    if (count + candidate.count > bridge::MAX_FACES)
-      continue;
-    for (uint8_t i = 0; i < candidate.count; ++i) {
-      const auto &face = candidate.faces[i];
-      d->faces[count++] = face;
-      float dist = faceBoxDistance(face, box1);
-      if (dual)
-        dist = std::min(dist, faceBoxDistance(face, box2));
-      if (nearestDist < 0.f || dist < nearestDist)
-        nearestDist = dist;
-    }
+    if (count == bridge::MAX_OBSTACLES)
+      break;
+    const auto &obstacle = candidate.obstacle;
+    d->obstacles[count++] = obstacle;
+    float dist = obstacleBoxDistance(obstacle, box1);
+    if (dual)
+      dist = std::min(dist, obstacleBoxDistance(obstacle, box2));
+    if (nearestDist < 0.f || dist < nearestDist)
+      nearestDist = dist;
   }
   d->nearestDist = nearestDist;
 
   // release-style barrier so Python never sees a torn write
   std::atomic_thread_fence(std::memory_order_release);
-  d->faceCount = static_cast<uint32_t>(count);
+  d->obstacleCount = static_cast<uint32_t>(count);
   d->stateSeq++;
 }
 

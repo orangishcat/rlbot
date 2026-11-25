@@ -11,11 +11,11 @@ from bridge import (
     CMD_OPEN_LEVEL,
     CMD_RESTART,
     CMD_UNKNOWN,
-    FACE_CIRCLE,
+    OBSTACLE_CIRCLE,
     GdBridge,
 )
 
-FACE_COLORS = {
+OBSTACLE_COLORS = {
     CAT_SOLID: "#4fc3f7",  # blue: collideable
     CAT_HAZARD: "#f44336",  # red: deadly
     CAT_INTERACT: "#4caf50",  # green: interactible
@@ -186,7 +186,7 @@ class ControlGUI:
             text=(
                 f"P1  {fmt(b.p1)}\n"
                 f"P2  {fmt(b.p2)}\n"
-                f"two-player: {b.two_player}   faces: {len(b.faces)}   "
+                f"two-player: {b.two_player}   obstacles: {len(b.obstacles)}   "
                 f"fresh: {b.state_fresh}\n"
                 f"attempt: {b.attempt_ms / 1000:.2f}s   "
                 f"destroyed: {'yes' if b.player_destroyed else 'no'}\n"
@@ -214,20 +214,16 @@ class ControlGUI:
         c.create_rectangle(1, 1, w, h, outline="#888")
 
         s = self.SCALE
-        for f in self.bridge.faces:
-            color = FACE_COLORS.get(f["category"], "#888")
-            if f["kind"] == FACE_CIRCLE:
-                r = f["x2"] * s
-                cx, cy = ox + f["x1"] * s, oy - f["y1"] * s
+        for o in self.bridge.obstacles:
+            color = OBSTACLE_COLORS.get(o["category"], "#888")
+            cx, cy = ox + o["x"] * s, oy - o["y"] * s
+            if o["kind"] == OBSTACLE_CIRCLE:
+                r = o["w"] * s
                 c.create_oval(cx - r, cy - r, cx + r, cy + r, outline=color, width=2)
             else:
-                c.create_line(
-                    ox + f["x1"] * s,
-                    oy - f["y1"] * s,
-                    ox + f["x2"] * s,
-                    oy - f["y2"] * s,
-                    fill=color,
-                    width=1,
+                hw, hh = o["w"] * s / 2, o["h"] * s / 2
+                c.create_rectangle(
+                    cx - hw, cy - hh, cx + hw, cy + hh, outline=color, width=1
                 )
 
         p_size = 8 * self.SCALE

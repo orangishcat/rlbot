@@ -18,27 +18,27 @@ BRIDGE_PATH = os.path.expanduser(
 )
 
 MAGIC = 0x52424447  # "GDBR"
-VERSION = 2
-MAX_FACES = 256
+VERSION = 3
+MAX_OBSTACLES = 32  # nearest obstacles sent per tick
 TICK_SAMPLES = 64  # rolling per-tick timing samples kept by the mod
 
 
-class FaceKind(IntEnum):
-    FLAT = 0  # line segment (x1, y1) - (x2, y2)
-    CIRCLE = 1  # circle at (x1, y1) with radius x2
+class ObstacleKind(IntEnum):
+    RECT = 0  # axis-aligned rect centred on (x, y), size (w, h)
+    CIRCLE = 1  # circle centred on (x, y), radius w
 
 
-class FaceCategory(IntEnum):
+class ObstacleCategory(IntEnum):
     SOLID = 0  # collideable, harmless (blocks, slopes)
     HAZARD = 1  # kills the player (spikes, saws)
     INTERACT = 2  # interactible (portals, pads, orbs, coins)
 
 
-FACE_FLAT = FaceKind.FLAT
-FACE_CIRCLE = FaceKind.CIRCLE
-CAT_SOLID = FaceCategory.SOLID
-CAT_HAZARD = FaceCategory.HAZARD
-CAT_INTERACT = FaceCategory.INTERACT
+OBSTACLE_RECT = ObstacleKind.RECT
+OBSTACLE_CIRCLE = ObstacleKind.CIRCLE
+CAT_SOLID = ObstacleCategory.SOLID
+CAT_HAZARD = ObstacleCategory.HAZARD
+CAT_INTERACT = ObstacleCategory.INTERACT
 
 
 class GameMode(IntEnum):
@@ -52,26 +52,26 @@ class GameMode(IntEnum):
     SWING = 7
 
 
-# header: magic, version, state_seq, input_seq, two_player, face_count, attempt_ms
+# header: magic, version, state_seq, input_seq, two_player, obstacle_count, attempt_ms
 HEADER = struct.Struct("<IIQQIII")
 HEADER_SIZE = HEADER.size  # 36
 PLAYER = struct.Struct(
     "<BBBx6f"
 )  # 28 bytes: gamemode, gravity, present, pad, x, y, size_x, size_y, vel_x, vel_y
-FACE = struct.Struct("<BB2x4f")  # 20 bytes, pad skipped
+OBSTACLE = struct.Struct("<BB2x4f")  # 20 bytes, pad skipped
 
-# numpy mirror of FACE, given explicit offsets to match the C layout
-FACE_DTYPE = np.dtype(
+# numpy mirror of OBSTACLE, given explicit offsets to match the C layout
+OBSTACLE_DTYPE = np.dtype(
     {
-        "names": ["kind", "category", "x1", "y1", "x2", "y2"],
+        "names": ["kind", "category", "x", "y", "w", "h"],
         "formats": ["u1", "u1", "<f4", "<f4", "<f4", "<f4"],
         "offsets": [0, 1, 4, 8, 12, 16],
     }
 )
-assert FACE_DTYPE.itemsize == FACE.size
+assert OBSTACLE_DTYPE.itemsize == OBSTACLE.size
 
-FACES_OFFSET = HEADER_SIZE + PLAYER.size * 2  # 92
-INPUTS_OFFSET = FACES_OFFSET + FACE.size * MAX_FACES
+OBSTACLES_OFFSET = HEADER_SIZE + PLAYER.size * 2  # 92
+INPUTS_OFFSET = OBSTACLES_OFFSET + OBSTACLE.size * MAX_OBSTACLES
 TOTAL_SIZE = INPUTS_OFFSET + 8
 
 INPUTS = struct.Struct("<BB")
@@ -105,7 +105,7 @@ CMD_NAME_OFFSET = CMD_STATUS_OFFSET + 3
 FLOAT = struct.Struct("<f")
 DIAG_OFFSET = CMD_NAME_OFFSET + CMD_NAME_LEN
 OBJECT_COUNT_OFFSET = DIAG_OFFSET
-FACE_CANDIDATES_OFFSET = DIAG_OFFSET + 4
+OBSTACLE_CANDIDATES_OFFSET = DIAG_OFFSET + 4
 INDEX_SEQ_OFFSET = DIAG_OFFSET + 8
 TICK_SEQ_OFFSET = DIAG_OFFSET + 12
 PHYSICS_NS_OFFSET = DIAG_OFFSET + 16
@@ -153,8 +153,8 @@ class GdBridge:
         self.p2 = PlayerState()
         self.two_player = False
         self.attempt_ms = 0
-        self._faces = np.zeros(MAX_FACES, dtype=FACE_DTYPE)
-        self.face_count = 0
+        self._obstacles = np.zeros(MAX_OBSTACLES, dtype=OBSTACLE_DTYPE)
+        self.obstacle_count = 0
         self.state_fresh = False
         self.step_mode = False
         self.player_destroyed = False
@@ -165,7 +165,7 @@ class GdBridge:
         self.cmd_status = CMD_OK
         # mod diagnostics (see Shared.hpp); refreshed by poll()
         self.object_count = 0
-        self.face_candidates = 0
+        self.obstacle_candidates = 0
         self.index_seq = 0
         self.index_build_ms = 0.0
         self.tick_seq = 0
@@ -214,7 +214,7 @@ class GdBridge:
         with profiler.phase("bridge/poll"):
             if not self._mm:
                 return False
-            magic, version, seq, _, two, face_count, attempt_ms = HEADER.unpack_from(
+            magic, version, seq, _, two, obstacle_count, attempt_ms = HEADER.unpack_from(
                 self._mm
             )
             if magic != MAGIC or version != VERSION:
@@ -239,7 +239,9 @@ class GdBridge:
             self.cmd_done = U32.unpack_from(snap, CMD_DONE_OFFSET)[0]
             self.cmd_status = snap[CMD_STATUS_OFFSET]
             self.object_count = U32.unpack_from(snap, OBJECT_COUNT_OFFSET)[0]
-            self.face_candidates = U32.unpack_from(snap, FACE_CANDIDATES_OFFSET)[0]
+            self.obstacle_candidates = U32.unpack_from(
+                snap, OBSTACLE_CANDIDATES_OFFSET
+            )[0]
             self.index_seq = U32.unpack_from(snap, INDEX_SEQ_OFFSET)[0]
             self.tick_seq = U32.unpack_from(snap, TICK_SEQ_OFFSET)[0]
             self.ticks_this_session = U32.unpack_from(snap, TICKS_SESSION_OFFSET)[0]
@@ -252,20 +254,20 @@ class GdBridge:
             self._read_player(self.p1, HEADER_SIZE)
             self._read_player(self.p2, HEADER_SIZE + PLAYER.size)
 
-            self.face_count = min(face_count, MAX_FACES)
-            if self.face_count:
-                self._faces[: self.face_count] = np.frombuffer(
-                    snap, FACE_DTYPE, self.face_count, FACES_OFFSET
+            self.obstacle_count = min(obstacle_count, MAX_OBSTACLES)
+            if self.obstacle_count:
+                self._obstacles[: self.obstacle_count] = np.frombuffer(
+                    snap, OBSTACLE_DTYPE, self.obstacle_count, OBSTACLES_OFFSET
                 )
             return True
 
     @property
-    def faces(self) -> np.ndarray:
-        """This frame's face records, in shared-memory layout.
+    def obstacles(self) -> np.ndarray:
+        """This frame's obstacle records, nearest first, in shared-memory layout.
 
         A view into a reused buffer: read it before the next poll, do not retain it.
         """
-        return self._faces[: self.face_count]
+        return self._obstacles[: self.obstacle_count]
 
     def tick_timings_ms(self) -> tuple[np.ndarray, np.ndarray]:
         """Per-tick (physics, writeState) durations for the last TICK_SAMPLES
