@@ -18,6 +18,7 @@ import math
 import os
 import re
 import sys
+from collections import deque
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -30,6 +31,7 @@ SEPARATOR = re.compile(r"^-{3,}$")
 ROW = re.compile(r"^\|\s*(.*?)\s*\|\s*(.*?)\s*\|$")
 
 X_CHOICES = ("iterations", "total_timesteps", "time_elapsed", "n_updates")
+WINDOW = 300
 
 
 def parse_block(lines):
@@ -154,7 +156,8 @@ def open_reader(path):
     if path.suffix == ".jsonl":
         return JsonlReader(path)
     try:
-        head = path.read_bytes()[:4096].lstrip()
+        with path.open("rb") as handle:
+            head = handle.read(4096).lstrip()
     except OSError:
         head = b""
     if head.startswith(b"{"):
@@ -168,7 +171,7 @@ class Plotter:
         self.x_key = f"time/{x_metric}"
         self.x_label = x_metric.replace("_", " ")
         self.filters = filters
-        self.series = {}  # metric -> [(x, y), ...]
+        self.series = {}  # metric -> last WINDOW (x, y) points
         self.order = []
         self.axes = {}
         self.fig = plt.figure(figsize=(13, 8), layout="constrained")
@@ -198,7 +201,7 @@ class Plotter:
                 if not self._wanted(name):
                     continue
                 if name not in self.series:
-                    self.series[name] = []
+                    self.series[name] = deque(maxlen=WINDOW)
                     self.order.append(name)
                     added = True
                 self.series[name].append((x, value))
@@ -210,7 +213,11 @@ class Plotter:
         names = self.order
         if not names:
             self._empty_note = self.fig.text(
-                0.5, 0.5, "waiting for the first training block…", ha="center", va="center"
+                0.5,
+                0.5,
+                "waiting for the first training block…",
+                ha="center",
+                va="center",
             )
             return
         self._empty_note = None
@@ -235,8 +242,8 @@ class Plotter:
         if added or (not self.axes and self.order):
             self._rebuild()
         for name, (ax, line) in self.axes.items():
-            points = self.series[name]
-            line.set_data([p[0] for p in points], [p[1] for p in points])
+            xs, ys = zip(*self.series[name])
+            line.set_data(xs, ys)
             ax.relim()
             ax.autoscale_view()
         return bool(self.order)
@@ -259,7 +266,9 @@ def main():
         help="only plot metrics whose name contains one of these",
     )
     parser.add_argument("--interval", default=1000, type=int, help="poll period in ms")
-    parser.add_argument("--once", action="store_true", help="plot what exists, then exit")
+    parser.add_argument(
+        "--once", action="store_true", help="plot what exists, then exit"
+    )
     parser.add_argument("--save", type=Path, help="write a PNG and exit")
     args = parser.parse_args()
 
@@ -278,7 +287,10 @@ def main():
         return
 
     animation = FuncAnimation(
-        plotter.fig, lambda _: plotter.refresh(), interval=args.interval, cache_frame_data=False
+        plotter.fig,
+        lambda _: plotter.refresh(),
+        interval=args.interval,
+        cache_frame_data=False,
     )
     plt.show()
     del animation

@@ -34,7 +34,7 @@ def load_latest_checkpoint(model, directory: str) -> int:
 class BestSurvivalCheckpoint(BaseCallback):
     """Every `every` env steps, save the policy that survived the most ticks so far."""
 
-    def __init__(self, directory: str, every: int = 4096):
+    def __init__(self, directory: str, every: int = 20000):
         super().__init__()
         self.directory = Path(directory)
         self.every = every
@@ -78,3 +78,4 @@ class BestSurvivalCheckpoint(BaseCallback):
                 },
                 self.directory / f"steps_{step:08d}_ticks_{self.best_ticks}.pt",
             )
+            self.best_ticks = 0
