@@ -15,7 +15,7 @@ def main():
         total_timesteps=3e6 - resumed_steps,
         progress_bar=True,
         reset_num_timesteps=resumed_steps <= 0,
-        callback=BestSurvivalCheckpoint(CHECKPOINT_DIR, every=4096),
+        callback=BestSurvivalCheckpoint(CHECKPOINT_DIR, every=50_000),
     )
 
 

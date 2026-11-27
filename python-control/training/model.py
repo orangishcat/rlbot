@@ -152,7 +152,7 @@ def create_model(env: gym.Env):
             "features_extractor_class": GdFeatureExtractor,
             "features_extractor_kwargs": {"features_dim": FEATURES_DIM},
         },
-        device="mps",
+        device="cpu",
     )
     ppo.set_logger(
         Logger(
